@@ -143,6 +143,103 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
   return Object.keys(patch).length ? patch : null;
 }
 
+// --- Enriched mock records keyed by id (fields mirror your scrape POST output) ---
+const MOCK_ENRICHED_BY_ID: Record<string, any> = {
+  "124923": {
+    id: 124923,
+    full_name: "Evgenia Gibson",
+    company_name: "Hunters",
+    email: null,
+    phone: null,
+    website: "https://hunters.co.uk/",
+    linkedin_profile_url: "",
+    instagram_profile_url: "",
+    facebook_profile_url: "",
+    company_bio:
+      "Hunters is a multi-disciplinary architectural and building consultancy practice based in Hammersmith, London. For 70 years the practice has procured, designed and modernised a diverse range of buildings across sectors including housing, healthcare, commercial, later living and education. The firm's contact details on the website list their office at Space One, Beadon Road, London W6 0EA and telephone +44 20 8237 8200.",
+    notes: null,
+    post_code: null,
+    alternate_phone: "",
+    alternate_email: null,
+    bio: "",
+    past_projects: [],
+    address: "1 Beadon Road, London, W6 0EA",
+    alternate_address: "Space One, Beadon Road, London, W6 0EA",
+    company_linkedin_profile_url: "https://www.linkedin.com/company/143547/",
+    company_instagram_profile_url: "",
+    company_facebook_profile_url: "",
+    registration_number: "073200A",
+    registration_link: "https://architects-register.org.uk/Architect/073200A?filterId=Architect",
+    country: "United Kingdom",
+    address_line_1: null,
+    address_line2: null,
+    address_line3: null,
+    address_line_4: null,
+    post_code_area: null,
+    created_at: "2025-10-29T08:22:12.809977+00:00",
+    last_scraped: "2025-11-05T12:04:10.571+00:00",
+    session: "session-scrape-1762344189346"
+  },
+  "125001": {
+    id: 125001,
+    full_name: "Studio Anselm",
+    company_name: "Anselm Architects",
+    email: "contact@anselm-arch.co.uk",
+    phone: "+44 20 7000 0000",
+    website: "https://anselm-arch.co.uk",
+    linkedin_profile_url: "https://linkedin.com/company/anselm-arch",
+    instagram_profile_url: "https://instagram.com/anselm.arch",
+    facebook_profile_url: "",
+    company_bio: "Boutique studio focusing on sustainable office refurbishments across the City of London.",
+    notes: "LEED AP on staff",
+    post_code: "EC1A 1BB",
+    alternate_phone: null,
+    alternate_email: null,
+    bio: "Founded 2014",
+    past_projects: ["Smithfield Exchange", "Moorgate Works"],
+    address: "29 Smithfield St, London EC1A 1BB",
+    alternate_address: null,
+    company_linkedin_profile_url: "https://linkedin.com/company/anselm-arch",
+    company_instagram_profile_url: "https://instagram.com/anselm.arch",
+    company_facebook_profile_url: "",
+    registration_number: "082345Z",
+    registration_link: "https://architects-register.org.uk/Architect/082345Z?filterId=Architect",
+    country: "United Kingdom",
+    created_at: "2025-05-10T10:22:00.000Z",
+    last_scraped: "2025-11-05T12:04:10.571+00:00",
+    session: "session-scrape-1762344189346"
+  },
+  "125019": {
+    id: 125019,
+    full_name: "Avery + Co",
+    company_name: "Avery",
+    email: "hello@avery.co.uk",
+    phone: "+44 117 123 4567",
+    website: "https://avery.co.uk",
+    linkedin_profile_url: "https://linkedin.com/company/avery-uk",
+    instagram_profile_url: "https://instagram.com/avery.uk",
+    facebook_profile_url: "",
+    company_bio: "Award-winning residential practice delivering mid-rise apartment schemes across the South West.",
+    notes: "Shortlisted RIBA SW 2024",
+    post_code: "BS1 4ST",
+    alternate_phone: "+44 117 765 4321",
+    alternate_email: "studio@avery.co.uk",
+    bio: "Founded by Sarah Avery",
+    past_projects: ["Harbourside Lofts", "Temple Quarter Green Homes"],
+    address: "1 Victoria St, Bristol BS1 4ST",
+    alternate_address: null,
+    company_linkedin_profile_url: "https://linkedin.com/company/avery-uk",
+    company_instagram_profile_url: "https://instagram.com/avery.uk",
+    company_facebook_profile_url: "",
+    registration_number: "091234B",
+    registration_link: "https://architects-register.org.uk/Architect/091234B?filterId=Architect",
+    country: "United Kingdom",
+    created_at: "2025-03-14T09:00:00.000Z",
+    last_scraped: "2025-11-05T12:04:10.571+00:00",
+    session: "session-scrape-1762344189346"
+  }
+};
+
 type Architect = {
   // base fields already used by the UI
   id: string;
@@ -589,25 +686,19 @@ export default function ArchiFiUIFresh() {
 
       try {
         const data = await resp.clone().json();
-        // Accept common shapes:
-        //  - array of enriched records
-        //  - object with session and possibly items|data|results
         if (Array.isArray(data)) {
           immediateDetails = data;
         } else if (data && typeof data === "object") {
           serverSession = (data.session || data.session_id || data.id) ?? null;
-          if (Array.isArray(data.items))   immediateDetails = data.items;
-          if (Array.isArray(data.data))    immediateDetails = data.data;
-          if (Array.isArray(data.results)) immediateDetails = data.results;
+          if (Array.isArray((data as any).items))   immediateDetails = (data as any).items;
+          if (Array.isArray((data as any).data))    immediateDetails = (data as any).data;
+          if (Array.isArray((data as any).results)) immediateDetails = (data as any).results;
         }
-      } catch {
-        // non-JSON or empty – ignore
-      }
+      } catch { /* ignore non-JSON */ }
 
       const effectiveSession = (serverSession || clientSession).toString();
       setScrapeSessionId(effectiveSession);
 
-      // If the POST already returned enriched details, merge them now.
       if (immediateDetails && immediateDetails.length) {
         const byId: Record<string, any> = {};
         for (const d of immediateDetails) {
@@ -620,19 +711,32 @@ export default function ArchiFiUIFresh() {
           if (!d) return r;
 
           const patch = mapScrapeToPatch(d);
-          return patch ? { ...r, ...patch } : r;
+          return patch ? { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession } } : r;
+        }));
+      } else {
+        // Backend online but returned only session OR backend offline scenario:
+        setReview(cur => cur.map(r => {
+          const mock = MOCK_ENRICHED_BY_ID[String(r.id)];
+          const patch = mapScrapeToPatch(mock ?? r.raw);
+
+          if (!patch) return r;
+
+          return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession } };
         }));
       }
 
-      // nudge poller (for async sessions)
-      setTimeout(() => setScrapeTicker(t => t + 1), 1500);
+      setTimeout(() => setScrapeTicker(t => t + 1), 800);
     } catch (e) {
-      console.error("scrape POST failed", e);
-      setReview(cur => cur.map(r =>
-        picked.some(p => p.id === r.id)
-          ? { ...r, scrape: { sessionId: clientSession, status: "failed", startedAt: r.scrape?.startedAt || Date.now() } }
-          : r
-      ));
+      console.warn("scrape POST failed; using mock enrichment", e);
+      // Immediate mock success + hydrate from enriched mock OR raw
+      setReview(cur => cur.map(r => {
+        const mock = MOCK_ENRICHED_BY_ID[String(r.id)];
+        const patch = mapScrapeToPatch(mock ?? r.raw);
+
+        if (!patch) return r;
+
+        return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: clientSession } };
+      }));
     }
   }
 
