@@ -1,8 +1,7 @@
 export const dynamic = "force-dynamic";
 
-const UPSTREAM_STATUS_BASE =
-  process.env.UPSTREAM_SCRAPE_STATUS_BASE ??
-  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook-test/ff8fce62-6ea3-4344-99bc-0c0075dbc2ae";
+const DETAILS_BASE =
+  process.env.UPSTREAM_ARCHITECT_DETAILS_BASE || ""; // e.g. https://.../webhook/architect?id=
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -15,21 +14,26 @@ export async function OPTIONS() { return new Response(null, { headers: CORS }); 
 
 export async function GET(req: Request) {
   try {
+    if (!DETAILS_BASE) {
+      return new Response(JSON.stringify({ error: "details endpoint not configured" }), {
+        status: 501, headers: { ...CORS, "Content-Type": "application/json; charset=utf-8" }
+      });
+    }
     const url = new URL(req.url);
-    const session = (url.searchParams.get("session") || "").trim();
-    if (!session) {
-      return new Response(JSON.stringify({ error: "missing session" }), {
+    const id = (url.searchParams.get("id") || "").trim();
+    if (!id) {
+      return new Response(JSON.stringify({ error: "missing id" }), {
         status: 400, headers: { ...CORS, "Content-Type": "application/json; charset=utf-8" }
       });
     }
-    const upstreamURL = `${UPSTREAM_STATUS_BASE}?session=${encodeURIComponent(session)}`;
-    const upstream = await fetch(upstreamURL, { cache: "no-store", next: { revalidate: 0 } });
+    const upstream = await fetch(`${DETAILS_BASE}${encodeURIComponent(id)}`, { cache: "no-store", next: { revalidate: 0 } });
     const text = await upstream.text();
     const type = upstream.headers.get("content-type") ?? "application/json; charset=utf-8";
     return new Response(text, { status: upstream.status, headers: { ...CORS, "Content-Type": type } });
   } catch (e:any) {
-    return new Response(JSON.stringify({ error: e?.message || "status proxy error" }), {
+    return new Response(JSON.stringify({ error: e?.message || "details proxy error" }), {
       status: 500, headers: { ...CORS, "Content-Type": "application/json; charset=utf-8" }
     });
   }
 }
+

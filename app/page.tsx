@@ -35,10 +35,12 @@ const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ classNam
   />
 );
 
-const Select: React.FC<{ value: string; onChange: (v: string) => void; options: string[]; className?: string }>
- = ({ value, onChange, options, className = "" }) => (
+const Select: React.FC<{ id?: string; name?: string; value: string; onChange: (v: string) => void; options: string[]; className?: string }>
+ = ({ id, name, value, onChange, options, className = "" }) => (
   <div className={`relative ${className}`}>
     <select
+      id={id}
+      name={name}
       className="appearance-none h-10 w-full rounded-2xl border border-neutral-300 bg-white px-3 pr-8 text-sm text-neutral-800 focus:border-neutral-400"
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -133,6 +135,7 @@ runSelfTests();
 const SEARCH_ENDPOINT = "/api/search";
 const SCRAPE_ENDPOINT = "/api/scrape";
 const SCRAPE_STATUS_ENDPOINT = "/api/scrape-status";
+const DETAILS_ENDPOINT = "/api/architect-details"; // optional; will no-op if 501
 
 type ApiItem = any; // defensive: map fields below
 type ApiResponse = { items?: ApiItem[]; nextId?: number | null; hasMore?: boolean };
@@ -423,26 +426,26 @@ export default function ArchiFiUIFresh() {
   }
 
   async function scrapeDetails() {
-    const picked = discover.filter((a) => discoverSelected[a.id]);
+    const picked = discover.filter(a => discoverSelected[a.id]);
     if (!picked.length) return;
 
-    const session = `session-scrape-${Date.now()}`;
+    const clientSession = `session-scrape-${Date.now()}`;
 
-    // add/move to review + mark inprogress with startedAt
+    // move to Review + mark in progress
     setReview(cur => {
       const ids = new Set(cur.map(x => x.id));
       const merged = [...cur];
       for (const p of picked) {
-        if (!ids.has(p.id)) merged.push({ ...p, scrape: { sessionId: session, status: "inprogress", startedAt: Date.now() } });
-        else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = { ...x, scrape: { sessionId: session, status: "inprogress", startedAt: Date.now() } }; });
+        const mark = { ...p, scrape: { sessionId: clientSession, status: "inprogress" as const, startedAt: Date.now() } };
+        if (!ids.has(p.id)) merged.push(mark);
+        else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = mark; });
       }
       return merged;
     });
     setActiveTab("review");
-    setScrapeSessionId(session);
 
-    // upstream expects an array of full records
-    const payload = picked.map((p) => p.raw && Object.keys(p.raw).length ? p.raw : {
+    // body: send the raw row if present, else a minimal object
+    const payload = picked.map(p => (p.raw && Object.keys(p.raw).length ? p.raw : {
       id: Number(p.id) || p.id,
       full_name: p.name,
       company_name: p.company,
@@ -451,31 +454,55 @@ export default function ArchiFiUIFresh() {
       website: p.website,
       post_code: p.postcode,
       address: p.address,
-    });
+    }));
 
     try {
       const resp = await postJSON(SCRAPE_ENDPOINT, payload);
 
-      // try to read session id from server
+      // prefer server-provided session id
       let serverSession: string | null = null;
       try {
         const data = await resp.clone().json();
         serverSession = (data?.session || data?.session_id || data?.id || null);
-      } catch { /* server might return empty/plain text; ignore */ }
+      } catch {}
 
-      const effective = (serverSession || session).toString().trim();
-      if (effective !== scrapeSessionId) setScrapeSessionId(effective);
+      const effectiveSession = (serverSession || clientSession).toString();
 
-      // nudge poller
+      setScrapeSessionId(effectiveSession);
       setTimeout(() => setScrapeTicker(t => t + 1), 1500);
     } catch (e) {
       console.error("scrape POST failed", e);
-      setReview(cur =>
-        cur.map(r => picked.some(p => p.id === r.id)
-          ? { ...r, scrape: { sessionId: session, status: "failed", startedAt: r.scrape?.startedAt || Date.now() } }
+      setReview(cur => cur.map(r =>
+        picked.some(p => p.id === r.id)
+          ? { ...r, scrape: { sessionId: clientSession, status: "failed", startedAt: r.scrape?.startedAt || Date.now() } }
           : r
-        )
-      );
+      ));
+    }
+  }
+
+  async function fetchDetailsFor(archId: string): Promise<Partial<Architect> | null> {
+    try {
+      const res = await fetch(`${DETAILS_ENDPOINT}?id=${encodeURIComponent(archId)}`, { cache: "no-store" });
+      if (!res.ok) { console.warn("details fetch skipped:", res.status); return null; }
+      const d = await res.json();
+      // Map fields that might be returned after scraping:
+      return {
+        email: d.email ?? undefined,
+        phone: d.phone ?? undefined,
+        website: d.website ?? undefined,
+        socials: {
+          linkedin: d.linkedin_profile_url ?? d.company_linkedin_profile_url ?? undefined,
+          instagram: d.instagram_profile_url ?? d.company_instagram_profile_url ?? undefined,
+          facebook: d.facebook_profile_url ?? d.company_facebook_profile_url ?? undefined,
+        },
+        address: d.address ?? undefined,
+        postcode: d.post_code ?? d.postcode ?? undefined,
+        company: d.company_name ?? d.company ?? undefined,
+        name: d.full_name ?? d.name ?? undefined,
+      };
+    } catch (e) {
+      console.warn("details fetch error", e);
+      return null;
     }
   }
 
@@ -490,39 +517,52 @@ export default function ArchiFiUIFresh() {
     const timeoutMs = 5 * 60 * 1000;
 
     const tick = async () => {
+      let arr: any[] = [];
       try {
         const res = await fetch(`${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(scrapeSessionId)}`, { cache: "no-store" });
         if (!res.ok) { console.warn("status poll failed:", res.status); return; }
-        const arr = await res.json();
+        arr = await res.json();
         if (!Array.isArray(arr)) return;
-
-        const byId: Record<string,string> = {};
-        for (const s of arr) {
-          const id = String(s.architect_id ?? s.id ?? "");
-          const status = String(s.status || "").toLowerCase().replace(/\s+/g, "");
-          if (id) byId[id] = status; // inprogress/complete/failed
-        }
-
-        setReview(cur => cur.map(r => {
-          const started = r.scrape?.startedAt ?? 0;
-          const overdue = r.scrape?.status === "inprogress" && started && (Date.now() - started >= timeoutMs);
-
-          const upstream = byId[r.id] ?? byId[String(r.id)];
-          let next = r.scrape?.status ?? "idle";
-          if (upstream === "inprogress") next = "inprogress";
-          if (upstream === "complete") next = "complete";
-          if (upstream === "failed") next = "failed";
-          if (overdue && next === "inprogress") next = "failed";
-
-          if (next === r.scrape?.status && !overdue) return r;
-          return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: next } };
-        }));
       } catch (e) {
         console.warn("status poll error", e);
+        return;
+      }
+
+      const byId: Record<string,string> = {};
+      for (const s of arr) {
+        const id = String(s.architect_id ?? s.id ?? "");
+        const status = String(s.status || "").toLowerCase().replace(/\s+/g, "");
+        if (id) byId[id] = status; // inprogress/complete/failed
+      }
+
+      // Update statuses and refresh details for completed ones
+      const completedIds: string[] = [];
+      setReview(cur => cur.map(r => {
+        const started = r.scrape?.startedAt ?? 0;
+        const overdue = r.scrape?.status === "inprogress" && started && (Date.now() - started >= timeoutMs);
+
+        const upstream = byId[r.id] ?? byId[String(r.id)];
+        let next = r.scrape?.status ?? "idle";
+        if (upstream === "inprogress") next = "inprogress";
+        if (upstream === "complete") next = "complete";
+        if (upstream === "failed") next = "failed";
+        if (overdue && next === "inprogress") next = "failed";
+
+        if (next === "complete") completedIds.push(r.id);
+
+        if (next === r.scrape?.status && !overdue) return r;
+        return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: next } };
+      }));
+
+      // Hydrate details (if endpoint configured)
+      for (const id of completedIds) {
+        const patch = await fetchDetailsFor(id);
+        if (!patch) continue;
+        setReview(cur => cur.map(r => (r.id === id ? { ...r, ...patch } : r)));
+        // If the currently selected details panel is this id, make sure panel shows updates (state already bound)
       }
     };
 
-    // run now & poll every 10s
     tick();
     const id = setInterval(tick, 10000);
     return () => clearInterval(id);
@@ -548,13 +588,13 @@ export default function ArchiFiUIFresh() {
           <div className="text-sm font-semibold tracking-wide text-neutral-400">ARCHIFI</div>
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Town or Postcode" className="min-w-0 max-w-[420px]" />
-          <Select value={jobType} onChange={setJobType} options={["All Job Types", "New Build", "Renovation", "Extension", "Interior Fit-Out"]} className="w-56" />
+          <Input id="q" name="q" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Town or Postcode" className="min-w-0 max-w-[420px]" />
+          <Select id="jobType" name="jobType" value={jobType} onChange={setJobType} options={["All Job Types", "New Build", "Renovation", "Extension", "Interior Fit-Out"]} className="w-56" />
           <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 px-3 py-2">
             <span className="text-xs text-neutral-500">Value(m)</span>
-            <Input type="number" min={0} max={5} step="0.1" value={valueMin} onChange={(e) => setValueMin(Number(e.target.value))} className="h-8 w-20" />
-            <span className="text-neutral-400">â€“</span>
-            <Input type="number" min={0} max={5} step="0.1" value={valueMax} onChange={(e) => setValueMax(Number(e.target.value))} className="h-8 w-20" />
+            <Input id="valueMin" name="valueMin" type="number" min={0} max={5} step="0.1" value={valueMin} onChange={(e) => setValueMin(Number(e.target.value))} className="h-8 w-20" />
+            <span className="text-neutral-400">â€"</span>
+            <Input id="valueMax" name="valueMax" type="number" min={0} max={5} step="0.1" value={valueMax} onChange={(e) => setValueMax(Number(e.target.value))} className="h-8 w-20" />
           </div>
         </div>
         <div className="flex items-center gap-2">
