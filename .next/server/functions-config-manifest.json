@@ -1,1 +1,1 @@
-{"version":1,"functions":{"/api/search":{}}}
+{"version":1,"functions":{"/api/scrape-status":{},"/api/search":{},"/api/scrape":{}}}

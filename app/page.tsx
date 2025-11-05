@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -76,6 +76,8 @@ type Architect = {
   valueMillions: number; // 0â€"5
   grade?: string;
   address?: string; // for filtering only (may come from upstream "address")
+  raw?: any; // keep original upstream row for scraping
+  scrape?: { sessionId?: string; status?: "idle" | "inprogress" | "complete" | "failed" };
 };
 
 function makeMock(n = 24): Architect[] {
@@ -129,6 +131,8 @@ runSelfTests();
 
 // === API integration (Discover) ===
 const SEARCH_ENDPOINT = "/api/search";
+const SCRAPE_ENDPOINT = "/api/scrape";
+const SCRAPE_STATUS_ENDPOINT = "/api/scrape-status";
 
 type ApiItem = any; // defensive: map fields below
 type ApiResponse = { items?: ApiItem[]; nextId?: number | null; hasMore?: boolean };
@@ -196,6 +200,8 @@ function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
     valueMillions: Number.isFinite(x.valueMillions) ? Number(x.valueMillions) : 0,
     grade: x.grade ?? ["A", "B", "C"][i % 3],
     address, // NEW
+    raw: x,
+    scrape: { status: "idle" },
   };
 }
 
@@ -261,6 +267,9 @@ export default function ArchiFiUIFresh() {
   const [reviewSelected, setReviewSelected] = useState<Record<string, boolean>>({});
   const [outreachSelected, setOutreachSelected] = useState<Record<string, boolean>>({});
   const [outreach, setOutreach] = useState<Architect[]>([]);
+
+  const [scrapeSessionId, setScrapeSessionId] = useState<string | null>(null);
+  const [scrapeTicker, setScrapeTicker] = useState<number>(0); // used to re-trigger polling
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -413,17 +422,97 @@ export default function ArchiFiUIFresh() {
     setDiscoverSelected(upd);
   }
 
-  function scrapeDetails() {
+  async function scrapeDetails() {
+    // existing logic that moved selected Discover -> Review stays as-is
     const picked = discover.filter((a) => discoverSelected[a.id]);
     const existing = new Set(review.map((r) => r.id));
     const merged = [...review, ...picked.filter((p) => !existing.has(p.id))];
-    setReview(merged);
+
+    // Mark as in progress locally
+    const session = `session-scrape-${Date.now()}`;
+    const updated = merged.map(r => existing.has(r.id) ? r : { ...r, scrape: { sessionId: session, status: "inprogress" as const } });
+
+    setReview(updated);
     setActiveTab("review");
-    if (merged.length) setDetailsId(merged[0].id);
+    if (updated.length) setDetailsId(updated[0].id);
+
+    // Prepare body the upstream expects: array of raw records (fallback to minimal shape)
+    const payload = picked.map((p, i) => {
+      const x = p.raw || {};
+      return Object.keys(x).length ? x : {
+        id: Number(p.id) || p.id,
+        full_name: p.name,
+        company_name: p.company,
+        email: p.email,
+        phone: p.phone,
+        website: p.website,
+        post_code: p.postcode,
+        address: p.address,
+      };
+    });
+
+    setScrapeSessionId(session);
+
+    try {
+      await postJSON(SCRAPE_ENDPOINT, payload); // fire-and-forget; upstream is async
+      // start polling after a brief delay to give the session time to register
+      setTimeout(() => setScrapeTicker(t => t + 1), 2000);
+    } catch (e) {
+      console.error("scrape kick-off failed", e);
+      // mark as failed
+      setReview(cur => cur.map(r => picked.some(p=>p.id===r.id) ? { ...r, scrape: { sessionId: session, status: "failed" } } : r));
+    }
   }
 
   const [outreachPlatform, setOutreachPlatform] = useState<Record<string, string>>({});
   const platforms = ["LinkedIn", "Email", "Instagram", "Facebook", "WhatsApp", "Call"];
+
+  // Polling effect (every ~10s while any inprogress exists)
+  useEffect(() => {
+    const active = review.some(r => r.scrape?.status === "inprogress");
+    if (!scrapeSessionId || !active) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const url = `${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(scrapeSessionId)}`;
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error(`status http ${res.status}`);
+        const arr = await res.json(); // expected array
+        if (!Array.isArray(arr)) return;
+
+        // Update statuses by architect_id
+        setReview(cur => {
+          const byId: Record<string, string> = {};
+          for (const s of arr) {
+            const id = String(s.architect_id ?? s.id ?? "");
+            const status = String(s.status || "").toLowerCase(); // inprogress/complete/failed
+            if (id) byId[id] = status;
+          }
+          if (!Object.keys(byId).length) return cur;
+
+          return cur.map(r => {
+            // Try both numeric and string id matches
+            const key = byId[r.id] ?? byId[String(r.id)] ?? null;
+            if (!key) return r;
+
+            const mapped = key === "inprogress" ? "inprogress" :
+                           key === "complete" ? "complete" :
+                           key === "failed" ? "failed" : r.scrape?.status ?? "idle";
+
+            return { ...r, scrape: { sessionId: scrapeSessionId, status: mapped as any } };
+          });
+        });
+      } catch (e) {
+        console.warn("status poll failed", e);
+      }
+    };
+
+    // poll immediately, then every 10s
+    tick();
+    const id = setInterval(tick, 10000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [scrapeSessionId, review.length, scrapeTicker]);
 
   function clearReview() {
     setReview([]);
@@ -592,6 +681,41 @@ export default function ArchiFiUIFresh() {
                           <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
                           <div className="mt-1 text-xs text-neutral-500">{a.city} • {a.postcode}</div>
                           <div className="mt-1 text-xs text-neutral-500">Grade {a.grade} • {a.company}</div>
+                          {/* Status line (small, inline) */}
+                          <div className="mt-1 text-xs">
+                            <span className="text-neutral-500">Scrape: </span>
+                            <span className={
+                              a.scrape?.status === "complete" ? "text-green-600" :
+                              a.scrape?.status === "failed" ? "text-red-600" :
+                              "text-amber-600"
+                            }>
+                              {a.scrape?.status ? a.scrape.status.replace(/inprogress/,"in progress") : "idle"}
+                            </span>
+                            {a.scrape?.status === "failed" && (
+                              <button
+                                className="ml-2 rounded-lg border border-neutral-300 px-2 py-0.5 text-[11px] hover:bg-neutral-50"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const session = `session-scrape-${Date.now()}`;
+                                  setScrapeSessionId(session);
+                                  // restart scrape for this single architect
+                                  const body = [a.raw || {
+                                    id: Number(a.id) || a.id,
+                                    full_name: a.name, company_name: a.company,
+                                    email: a.email, phone: a.phone, website: a.website,
+                                    post_code: a.postcode, address: a.address
+                                  }];
+                                  // mark as inprogress
+                                  setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "inprogress" } } : r));
+                                  postJSON(SCRAPE_ENDPOINT, body).then(() => setTimeout(()=>setScrapeTicker(t=>t+1), 1500)).catch(() => {
+                                    setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "failed" } } : r));
+                                  });
+                                }}
+                              >
+                                Retry
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
                           <input onClick={(e)=>e.stopPropagation()} type="checkbox" checked={!!reviewSelected[a.id]} onChange={() => setReviewSelected(p=>({ ...p, [a.id]: !p[a.id] }))} className="h-4 w-4 rounded border-neutral-300 accent-neutral-900" />
