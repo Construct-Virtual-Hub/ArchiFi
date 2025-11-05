@@ -63,6 +63,33 @@ const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className = "", 
 
 const Divider: React.FC = () => <div className="h-px w-full bg-neutral-200" />;
 
+function patchFromScrape(d: any): Partial<Architect> | null {
+  if (!d || typeof d !== "object") return null;
+
+  const socials = {
+    linkedin: d.linkedin_profile_url ?? d.company_linkedin_profile_url ?? "",
+    instagram: d.instagram_profile_url ?? d.company_instagram_profile_url ?? "",
+    facebook: d.facebook_profile_url ?? d.company_facebook_profile_url ?? "",
+  };
+
+  return {
+    // core identity
+    name: d.full_name ?? d.name,
+    company: d.company_name ?? d.company,
+    // contacts
+    email: d.email ?? undefined,
+    phone: d.phone ?? (d.alternate_phone || undefined),
+    website: d.website ?? undefined,
+    // location / address
+    address: d.address ?? d.alternate_address ?? undefined,
+    postcode: d.post_code ?? d.postcode ?? d.post_code_area ?? undefined,
+    // socials block
+    socials,
+    // extras we might show later
+    raw: d, // keep the full record
+  } as Partial<Architect>;
+}
+
 type Architect = {
   id: string;
   name: string;
@@ -466,31 +493,30 @@ export default function ArchiFiUIFresh() {
     try {
       const resp = await postJSON(SCRAPE_ENDPOINT, payload);
 
-      // 2) Try to read server response:
-      //    - If it includes a session id, use it for polling
-      //    - If it includes an array of detailed records, apply them immediately to Architect Details/Review
       let serverSession: string | null = null;
       let immediateDetails: any[] | null = null;
 
       try {
         const data = await resp.clone().json();
-        // common shapes:
-        // { session: "...", data: [...] } OR { session_id: "...", items: [...] } OR just [...]
-        if (Array.isArray(data)) immediateDetails = data;
-        if (data && typeof data === "object") {
+        // Accept common shapes:
+        //  - array of enriched records
+        //  - object with session and possibly items|data|results
+        if (Array.isArray(data)) {
+          immediateDetails = data;
+        } else if (data && typeof data === "object") {
           serverSession = (data.session || data.session_id || data.id) ?? null;
-          if (Array.isArray(data.data)) immediateDetails = data.data;
-          if (Array.isArray(data.items)) immediateDetails = data.items;
+          if (Array.isArray(data.items))   immediateDetails = data.items;
+          if (Array.isArray(data.data))    immediateDetails = data.data;
           if (Array.isArray(data.results)) immediateDetails = data.results;
         }
       } catch {
-        // not JSON? ignore
+        // non-JSON or empty – ignore
       }
 
       const effectiveSession = (serverSession || clientSession).toString();
       setScrapeSessionId(effectiveSession);
 
-      // 3) If the scraper returned enriched details immediately, merge them now
+      // If the POST already returned enriched details, merge them now.
       if (immediateDetails && immediateDetails.length) {
         const byId: Record<string, any> = {};
         for (const d of immediateDetails) {
@@ -502,27 +528,12 @@ export default function ArchiFiUIFresh() {
           const d = byId[String(r.id)];
           if (!d) return r;
 
-          // Map scraper fields → our UI fields
-          const merged: Partial<Architect> = {
-            email: d.email ?? r.email,
-            phone: d.phone ?? r.phone,
-            website: d.website ?? r.website,
-            socials: {
-              linkedin: d.linkedin_profile_url ?? d.company_linkedin_profile_url ?? r.socials?.linkedin,
-              instagram: d.instagram_profile_url ?? d.company_instagram_profile_url ?? r.socials?.instagram,
-              facebook: d.facebook_profile_url ?? d.company_facebook_profile_url ?? r.socials?.facebook,
-            },
-            address: d.address ?? r.address,
-            postcode: d.post_code ?? d.postcode ?? r.postcode,
-            company: d.company_name ?? d.company ?? r.company,
-            name: d.full_name ?? d.name ?? r.name,
-          };
-
-          return { ...r, ...merged, raw: r.raw ?? d };
+          const patch = patchFromScrape(d);
+          return patch ? { ...r, ...patch } : r;
         }));
       }
 
-      // nudge poller in case we only got session
+      // nudge poller (for async sessions)
       setTimeout(() => setScrapeTicker(t => t + 1), 1500);
     } catch (e) {
       console.error("scrape POST failed", e);
@@ -580,56 +591,73 @@ export default function ArchiFiUIFresh() {
         return;
       }
 
-      const byId: Record<string, string> = {};
+      // We'll use two passes:
+      // 1) Update statuses (use raw upstream text)
+      // 2) Hydrate details for rows that include enrichment fields (your example object)
+
+      // Pass 1 – status update
+      const byIdStatus: Record<string, string> = {};
       for (const s of arr) {
         const id = String(s.architect_id ?? s.id ?? "");
-        const raw = String(s.status ?? "").trim(); // e.g. "success", "inprogress", "failed"
-        if (id) byId[id] = raw;
+        const raw = String(s.status ?? "").trim(); // e.g. "success" | "inprogress" | "failed" | "complete"
+        if (id) byIdStatus[id] = raw;
       }
 
-      const justFinished: string[] = [];
-
+      const finishedIds: string[] = [];
       setReview(cur => cur.map(r => {
         const current = (r.scrape?.status ?? "idle").toLowerCase();
-        const upstreamRaw = byId[r.id] ?? byId[String(r.id)] ?? current;
-        let nextRaw = upstreamRaw;
+        let nextRaw = byIdStatus[r.id] ?? byIdStatus[String(r.id)] ?? current;
 
-        // timeout if still in progress after 5 min
+        // timeout protection
         const started = r.scrape?.startedAt ?? 0;
         const inProgress = (nextRaw.toLowerCase() === "inprogress");
         const overdue = inProgress && started && (Date.now() - started >= timeoutMs);
         if (overdue) nextRaw = "failed";
 
-        const finished = nextRaw.toLowerCase() === "success" || nextRaw.toLowerCase() === "complete";
-        if (finished && current === "inprogress") justFinished.push(r.id);
+        const finished = ["success", "complete"].includes(nextRaw.toLowerCase());
+        if (finished && current === "inprogress") finishedIds.push(r.id);
 
         if (nextRaw === r.scrape?.status && !overdue) return r;
         return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: nextRaw } };
       }));
 
-      // Hydrate each finished card from the raw we already hold (same data we sent to scraper)
-      if (justFinished.length) {
+      // Pass 2 – hydration from the status payload when it contains details
+      // Your backend sometimes returns full enriched objects in the poll (example you sent).
+      const byIdDetails: Record<string, any> = {};
+      for (const s of arr) {
+        // Heuristic: treat rows with any of these fields as "detailed"
+        const looksDetailed =
+          s.email !== undefined || s.website !== undefined ||
+          s.company_bio !== undefined || s.address !== undefined ||
+          s.linkedin_profile_url !== undefined || s.company_linkedin_profile_url !== undefined;
+
+        if (!looksDetailed) continue;
+        const id = String(s.architect_id ?? s.id ?? "");
+        if (id) byIdDetails[id] = s;
+      }
+
+      if (Object.keys(byIdDetails).length) {
         setReview(cur => cur.map(r => {
-          if (!justFinished.includes(r.id)) return r;
+          const d = byIdDetails[r.id] ?? byIdDetails[String(r.id)];
+          if (!d) return r;
 
-          const x = r.raw || {}; // what we posted to the scraper, or what it returned immediately
+          const patch = patchFromScrape(d);
+          return patch ? { ...r, ...patch } : r;
+        }));
+      }
 
-          const merged: Partial<Architect> = {
-            email: r.email ?? x.email,
-            phone: r.phone ?? x.phone,
-            website: r.website ?? x.website,
-            socials: r.socials ?? {
-              linkedin: x.linkedin_profile_url || x.company_linkedin_profile_url || "",
-              instagram: x.instagram_profile_url || x.company_instagram_profile_url || "",
-              facebook: x.facebook_profile_url || x.company_facebook_profile_url || "",
-            },
-            address: r.address ?? x.address,
-            postcode: r.postcode ?? (x.post_code || x.postcode),
-            company: r.company ?? (x.company_name || x.company),
-            name: r.name ?? (x.full_name || x.name),
-          };
+      // Fallback: if a card just finished and we STILL have no details payload,
+      // hydrate from raw (what we sent to the scraper) so the panel isn't empty.
+      if (finishedIds.length) {
+        setReview(cur => cur.map(r => {
+          if (!finishedIds.includes(r.id)) return r;
 
-          return { ...r, ...merged };
+          // if already hydrated above, leave as is
+          if (r.email || r.phone || r.website || r.socials) return r;
+
+          const x = r.raw || {};
+          const patch = patchFromScrape(x);
+          return patch ? { ...r, ...patch } : r;
         }));
       }
     };
