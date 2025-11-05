@@ -148,25 +148,59 @@ async function postJSON(url: string, body: any, timeoutMs = 20000): Promise<Resp
 }
 
 function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
-  // Defensive mapping with sensible fallbacks to avoid crashing the UI.
+  // Your upstream sample shows fields like:
+  // id, full_name, company_name, post_code, address, country, created_at, socials *_url etc.
+  const name =
+    x.full_name ??
+    x.name ??
+    x.architectName ??
+    `Architect ${i + 1}`;
+
+  const company =
+    x.company_name ??
+    x.company ??
+    x.companyName ??
+    "";
+
+  const postcode =
+    x.post_code ??
+    x.postcode ??
+    x.post_code ??
+    "";
+
+  // Try to infer city from address if present; otherwise blank
+  let city = x.city ?? x.town ?? "";
+  if (!city && typeof x.address === "string") {
+    // naive: first token before comma
+    city = String(x.address).split(",")[0]?.trim() || "";
+  }
+
+  const email =
+    x.email ??
+    (name ? `${String(name).toLowerCase().replace(/\s+/g, ".")}@example.co.uk` : "architect@example.co.uk");
+
+  const phone = x.phone ?? x.alternate_phone ?? "+44 7500000000";
+
+  const socials = {
+    linkedin: x.linkedin_profile_url ?? x.company_linkedin_profile_url ?? "",
+    instagram: x.instagram_profile_url ?? x.company_instagram_profile_url ?? "",
+    facebook: x.facebook_profile_url ?? x.company_facebook_profile_url ?? "",
+  };
+
   return {
     id: String(x.id ?? x.architect_id ?? x._id ?? `api-${Date.now()}-${i}`),
-    name: x.name ?? x.architectName ?? `Architect ${i + 1}`,
-    city: x.city ?? x.town ?? "",
-    postcode: x.postcode ?? x.post_code ?? "",
-    company: x.company ?? x.companyName ?? "",
-    email: x.email ?? `${(x.name ?? "architect").toString().toLowerCase().replace(/\s+/g,".")}@example.co.uk`,
-    phone: x.phone ?? "+44 7500000000",
+    name,
+    city,
+    postcode,
+    company,
+    email,
+    phone,
     website: x.website ?? x.url ?? "",
-    socials: {
-      linkedin: x.linkedin ?? "",
-      instagram: x.instagram ?? "",
-      facebook: x.facebook ?? "",
-    },
+    socials,
     specialty: x.specialty ?? x.speciality ?? "Residential",
     projectType: x.projectType ?? x.type ?? "New Build",
     valueMillions: Number.isFinite(x.valueMillions) ? Number(x.valueMillions) : 0,
-    grade: x.grade ?? ["A","B","C"][i % 3],
+    grade: x.grade ?? ["A", "B", "C"][i % 3],
   };
 }
 
@@ -221,11 +255,10 @@ export default function ArchiFiUIFresh() {
       setApiPages([]);
       setApiNextIds([]);
       setApiPageIndex(0);
-      setDiscover([]);            // keep existing state in sync
-      setDiscoverSelected({});    // deselect
-      setPage(1);                 // if you still use local page var elsewhere
+      setDiscover([]);
+      setDiscoverSelected({});
+      setPage(1);
 
-      // If the user typed in the top search box, use postcode_town filter; else use first page (limit only)
       const payload =
         query && query.trim().length > 0
           ? { postcode_town: query.trim(), limit: 100 }
@@ -233,22 +266,26 @@ export default function ArchiFiUIFresh() {
 
       const res = await postJSON(SEARCH_ENDPOINT, payload);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ApiResponse;
+      const data = await res.json();
 
-      const items = (data.items ?? []).map(mapApiItemToArchitect);
-      const nextId = data.nextId ?? null;
+      // Accept either an array or { items, nextId }
+      const rawItems: ApiItem[] = Array.isArray(data) ? data : (data.items ?? []);
+      const nextId = Array.isArray(data) ? null : (data.nextId ?? null);
 
+      const items = rawItems.map(mapApiItemToArchitect);
       setApiPages([items]);
       setApiNextIds([nextId]);
-      setDiscover(items); // feed current UI
+      setApiPageIndex(0);
+      setDiscover(items);
+      console.log("DISCOVER items:", items.length, items.slice(0,2));
       setActiveTab("discover");
     } catch (e: any) {
-      // Fallback to mock so the UI still works
       console.error("SEARCH failed; falling back to mock:", e?.message || e);
       setApiError("Online search failed. Showing mock results.");
       const mock = makeMock(50);
       setApiPages([mock]);
       setApiNextIds([null]);
+      setApiPageIndex(0);
       setDiscover(mock);
       setActiveTab("discover");
     } finally {
@@ -259,21 +296,28 @@ export default function ArchiFiUIFresh() {
   async function goToNextPage() {
     if (apiLoading) return;
     const idx = apiPageIndex;
+
+    // If we already fetched the next page, just show it.
     const cachedNext = apiPages[idx + 1];
     if (cachedNext) {
       setApiPageIndex(idx + 1);
       setDiscover(cachedNext);
       return;
     }
+
     const nextId = apiNextIds[idx];
     if (nextId == null) return; // no more pages
+
     try {
       setApiLoading(true);
       const res = await postJSON(SEARCH_ENDPOINT, { limit: 100, nextId });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as ApiResponse;
-      const items = (data.items ?? []).map(mapApiItemToArchitect);
-      const newNextId = data.nextId ?? null;
+      const data = await res.json();
+
+      const rawItems: ApiItem[] = Array.isArray(data) ? data : (data.items ?? []);
+      const newNextId = Array.isArray(data) ? null : (data.nextId ?? null);
+
+      const items = rawItems.map(mapApiItemToArchitect);
 
       setApiPages((p) => [...p, items]);
       setApiNextIds((p) => [...p, newNextId]);
