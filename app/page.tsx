@@ -126,6 +126,51 @@ function runSelfTests() {
 }
 runSelfTests();
 
+// === API integration (Discover) ===
+const SEARCH_ENDPOINT =
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
+
+type ApiItem = any; // defensive: map fields below
+type ApiResponse = { items?: ApiItem[]; nextId?: number | null; hasMore?: boolean };
+
+async function postJSON(url: string, body: any, timeoutMs = 20000): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
+  // Defensive mapping with sensible fallbacks to avoid crashing the UI.
+  return {
+    id: String(x.id ?? x.architect_id ?? x._id ?? `api-${Date.now()}-${i}`),
+    name: x.name ?? x.architectName ?? `Architect ${i + 1}`,
+    city: x.city ?? x.town ?? "",
+    postcode: x.postcode ?? x.post_code ?? "",
+    company: x.company ?? x.companyName ?? "",
+    email: x.email ?? `${(x.name ?? "architect").toString().toLowerCase().replace(/\s+/g,".")}@example.co.uk`,
+    phone: x.phone ?? "+44 7500000000",
+    website: x.website ?? x.url ?? "",
+    socials: {
+      linkedin: x.linkedin ?? "",
+      instagram: x.instagram ?? "",
+      facebook: x.facebook ?? "",
+    },
+    specialty: x.specialty ?? x.speciality ?? "Residential",
+    projectType: x.projectType ?? x.type ?? "New Build",
+    valueMillions: Number.isFinite(x.valueMillions) ? Number(x.valueMillions) : 0,
+    grade: x.grade ?? ["A","B","C"][i % 3],
+  };
+}
+
 export default function ArchiFiUIFresh() {
   const [query, setQuery] = useState(""); // town/postcode
   const [jobType, setJobType] = useState("All Job Types");
@@ -147,6 +192,15 @@ export default function ArchiFiUIFresh() {
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
+  // API-backed pagination (100/page)
+  const [apiLoading, setApiLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  // Cache pages so Previous works without re-fetching.
+  const [apiPages, setApiPages] = useState<Architect[][]>([]);
+  const [apiNextIds, setApiNextIds] = useState<(number | null)[]>([]); // nextId for each page index
+  const [apiPageIndex, setApiPageIndex] = useState(0);
+
   const filtered = useMemo(() => {
     return discover.filter((a) => {
       const matchesQuery = !query
@@ -161,12 +215,85 @@ export default function ArchiFiUIFresh() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
 
-  function runSearch() {
-    const data = makeMock(50);
-    setDiscover(data);
-    setPage(1);
-    setDiscoverSelected({});
-    setActiveTab("discover");
+  async function runSearch() {
+    try {
+      setApiError(null);
+      setApiLoading(true);
+      setApiPages([]);
+      setApiNextIds([]);
+      setApiPageIndex(0);
+      setDiscover([]);            // keep existing state in sync
+      setDiscoverSelected({});    // deselect
+      setPage(1);                 // if you still use local page var elsewhere
+
+      // If the user typed in the top search box, use postcode_town filter; else use first page (limit only)
+      const payload =
+        query && query.trim().length > 0
+          ? { postcode_town: query.trim(), limit: 100 }
+          : { limit: 100 };
+
+      const res = await postJSON(SEARCH_ENDPOINT, payload);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as ApiResponse;
+
+      const items = (data.items ?? []).map(mapApiItemToArchitect);
+      const nextId = data.nextId ?? null;
+
+      setApiPages([items]);
+      setApiNextIds([nextId]);
+      setDiscover(items); // feed current UI
+      setActiveTab("discover");
+    } catch (e: any) {
+      // Fallback to mock so the UI still works
+      console.error("SEARCH failed; falling back to mock:", e?.message || e);
+      setApiError("Online search failed. Showing mock results.");
+      const mock = makeMock(50);
+      setApiPages([mock]);
+      setApiNextIds([null]);
+      setDiscover(mock);
+      setActiveTab("discover");
+    } finally {
+      setApiLoading(false);
+    }
+  }
+
+  async function goToNextPage() {
+    if (apiLoading) return;
+    const idx = apiPageIndex;
+    const cachedNext = apiPages[idx + 1];
+    if (cachedNext) {
+      setApiPageIndex(idx + 1);
+      setDiscover(cachedNext);
+      return;
+    }
+    const nextId = apiNextIds[idx];
+    if (nextId == null) return; // no more pages
+    try {
+      setApiLoading(true);
+      const res = await postJSON(SEARCH_ENDPOINT, { limit: 100, nextId });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as ApiResponse;
+      const items = (data.items ?? []).map(mapApiItemToArchitect);
+      const newNextId = data.nextId ?? null;
+
+      setApiPages((p) => [...p, items]);
+      setApiNextIds((p) => [...p, newNextId]);
+      setApiPageIndex(idx + 1);
+      setDiscover(items);
+    } catch (e) {
+      console.error("Next page fetch failed:", e);
+      setApiError("Could not load next page.");
+    } finally {
+      setApiLoading(false);
+    }
+  }
+
+  function goToPrevPage() {
+    if (apiLoading) return;
+    const idx = apiPageIndex;
+    if (idx === 0) return;
+    setApiPageIndex(idx - 1);
+    setDiscover(apiPages[idx - 1] ?? []);
   }
 
   function clearDiscover() {
@@ -269,10 +396,20 @@ export default function ArchiFiUIFresh() {
           {activeTab === "discover" && (
             <Card className="h-[72vh] overflow-hidden">
               <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3">
-                <div className="text-sm font-medium text-neutral-700">Search Results</div>
+                <div>
+                  <div className="text-sm font-medium text-neutral-700">Search Results</div>
+                  {apiError && <div className="text-xs text-neutral-500">{apiError}</div>}
+                </div>
                 <div className="flex items-center gap-2">
+                  {/* New: Pagination controls on the LEFT */}
+                  <Btn variant="outline" onClick={goToPrevPage} className="whitespace-nowrap">Previous Page</Btn>
+                  <Btn variant="outline" onClick={goToNextPage} className="whitespace-nowrap">Next Page</Btn>
+
+                  {/* Existing controls (unchanged order after pagination) */}
                   <Btn variant="outline" onClick={selectAllOnPage}>Select All</Btn>
-                  <Btn onClick={scrapeDetails}>Scrape Details</Btn>
+                  <Btn onClick={scrapeDetails} disabled={apiLoading}>
+                    {apiLoading ? "Loading..." : "Scrape Details"}
+                  </Btn>
                 </div>
               </div>
               <div className="grid h-[calc(72vh-56px)] auto-rows-min grid-cols-1 gap-2 overflow-y-auto p-3 md:grid-cols-2 overscroll-contain">
