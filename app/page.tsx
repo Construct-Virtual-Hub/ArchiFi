@@ -204,6 +204,38 @@ function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
   };
 }
 
+// Apply local filters (job type + value range) and optional query guard
+function applyClientFilters(items: Architect[], query: string, jobType: string, vMin: number, vMax: number): Architect[] {
+  const q = (query || "").trim().toLowerCase();
+  return items.filter(a => {
+    const byJob = jobType === "All Job Types" ? true : a.projectType === jobType;
+    const byVal = a.valueMillions >= vMin && a.valueMillions <= vMax;
+    const byQuery = !q ? true : (
+      (a.city || "").toLowerCase().includes(q) ||
+      (a.postcode || "").toLowerCase().includes(q)
+    );
+    return byJob && byVal && byQuery;
+  });
+}
+
+// Extract nextId from API response or infer it from the last raw item when API doesn't send it.
+function extractNextId(data: any, rawItems: any[]): number | null {
+  // If API provided nextId, prefer it
+  let nextId = Array.isArray(data) ? null : (data?.nextId ?? null);
+  if (nextId != null) return nextId;
+
+  // Infer: try to parse numeric id from the last raw item
+  if (rawItems && rawItems.length) {
+    const tail = rawItems[rawItems.length - 1];
+    const candidate = tail?.id ?? tail?.architect_id ?? tail?._id ?? null;
+    if (candidate != null) {
+      const n = Number(String(candidate).toString().replace(/[^\d]/g, ""));
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
 export default function ArchiFiUIFresh() {
   const [query, setQuery] = useState(""); // town/postcode
   const [jobType, setJobType] = useState("All Job Types");
@@ -274,22 +306,25 @@ export default function ArchiFiUIFresh() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
-      // Accept either an array or { items, nextId }
       const rawItems: ApiItem[] = Array.isArray(data) ? data : (data.items ?? []);
-      const nextId = Array.isArray(data) ? null : (data.nextId ?? null);
+      const mapped = rawItems.map(mapApiItemToArchitect);
 
-      const items = rawItems.map(mapApiItemToArchitect);
-      setApiPages([items]);
+      // Apply local UI filters (job type + value range + query guard)
+      const filtered = applyClientFilters(mapped, query, jobType, valueMin, valueMax);
+
+      const nextId = extractNextId(data, rawItems);
+
+      setApiPages([filtered]);       // cache filtered page
       setApiNextIds([nextId]);
       setApiPageIndex(0);
-      setDiscover(items);
-      console.log("DISCOVER items:", items.length, items.slice(0,2));
-      console.log("Visible (server page) count:", items.length);
+      setDiscover(filtered);         // drive the Discover grid
       setActiveTab("discover");
+
+      console.log("Search loaded:", { count: filtered.length, nextId });
     } catch (e: any) {
       console.error("SEARCH failed; falling back to mock:", e?.message || e);
       setApiError("Online search failed. Showing mock results.");
-      const mock = makeMock(50);
+      const mock = applyClientFilters(makeMock(50), query, jobType, valueMin, valueMax);
       setApiPages([mock]);
       setApiNextIds([null]);
       setApiPageIndex(0);
@@ -304,7 +339,7 @@ export default function ArchiFiUIFresh() {
     if (apiLoading) return;
     const idx = apiPageIndex;
 
-    // If we already fetched the next page, just show it.
+    // If already cached, show it
     const cachedNext = apiPages[idx + 1];
     if (cachedNext) {
       setApiPageIndex(idx + 1);
@@ -312,25 +347,31 @@ export default function ArchiFiUIFresh() {
       return;
     }
 
-    const nextId = apiNextIds[idx];
-    if (nextId == null) return; // no more pages
+    const prevNextId = apiNextIds[idx];
+    if (prevNextId == null) return; // no more pages
 
     try {
       setApiLoading(true);
-      const res = await postJSON(SEARCH_ENDPOINT, { limit: 100, nextId });
+
+      const base: any = { limit: 100, nextId: prevNextId };
+      if (query && query.trim().length > 0) base.postcode_town = query.trim();
+
+      const res = await postJSON(SEARCH_ENDPOINT, base);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
       const rawItems: ApiItem[] = Array.isArray(data) ? data : (data.items ?? []);
-      const newNextId = Array.isArray(data) ? null : (data.nextId ?? null);
+      const mapped = rawItems.map(mapApiItemToArchitect);
+      const filtered = applyClientFilters(mapped, query, jobType, valueMin, valueMax);
 
-      const items = rawItems.map(mapApiItemToArchitect);
+      const newNextId = extractNextId(data, rawItems);
 
-      setApiPages((p) => [...p, items]);
+      setApiPages((p) => [...p, filtered]);
       setApiNextIds((p) => [...p, newNextId]);
       setApiPageIndex(idx + 1);
-      setDiscover(items);
-      console.log("Visible (server page) count:", items.length);
+      setDiscover(filtered);
+
+      console.log("Next page:", { count: filtered.length, nextId: newNextId });
     } catch (e) {
       console.error("Next page fetch failed:", e);
       setApiError("Could not load next page.");
