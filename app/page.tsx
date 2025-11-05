@@ -69,17 +69,21 @@ type Architect = {
   city: string;
   postcode: string;
   company: string;
-  email: string;
-  phone: string;
+  email?: string;
+  phone?: string;
   website?: string;
   socials?: { linkedin?: string; instagram?: string; facebook?: string };
-  specialty: string;
-  projectType: string;
-  valueMillions: number; // 0â€"5
+  specialty?: string;
+  projectType?: string;
+  valueMillions?: number;
   grade?: string;
-  address?: string; // for filtering only (may come from upstream "address")
-  raw?: any; // keep original upstream row for scraping
-  scrape?: { sessionId?: string; status?: string; startedAt?: number }; // show raw upstream status text
+  address?: string;
+  raw?: any; // original record we send for scraping
+  scrape?: {
+    sessionId?: string;
+    status?: string; // keep raw upstream status text (e.g., "success", "inprogress", "failed")
+    startedAt?: number;
+  };
 };
 
 function makeMock(n = 24): Architect[] {
@@ -431,19 +435,7 @@ export default function ArchiFiUIFresh() {
 
     const clientSession = `session-scrape-${Date.now()}`;
 
-    // move/mark
-    setReview(cur => {
-      const ids = new Set(cur.map(x => x.id));
-      const merged = [...cur];
-      for (const p of picked) {
-        const mark = { ...p, scrape: { sessionId: clientSession, status: "inprogress", startedAt: Date.now() } };
-        if (!ids.has(p.id)) merged.push(mark);
-        else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = mark; });
-      }
-      return merged;
-    });
-    setActiveTab("review");
-
+    // Build payload we POST to the scraper
     const payload = picked.map(p =>
       p.raw && Object.keys(p.raw).length ? p.raw : {
         id: Number(p.id) || p.id,
@@ -457,20 +449,80 @@ export default function ArchiFiUIFresh() {
       }
     );
 
+    // move/mark - attach raw payload to review items
+    setReview(cur => {
+      const ids = new Set(cur.map(x => x.id));
+      const merged = [...cur];
+      for (const p of picked) {
+        const rawOfThis = payload.find((x: any) => String(x.id) === String(p.id)) ?? p.raw ?? null;
+        const mark = { ...p, raw: rawOfThis, scrape: { sessionId: clientSession, status: "inprogress", startedAt: Date.now() } };
+        if (!ids.has(p.id)) merged.push(mark);
+        else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = mark; });
+      }
+      return merged;
+    });
+    setActiveTab("review");
+
     try {
       const resp = await postJSON(SCRAPE_ENDPOINT, payload);
 
-      // prefer session returned by backend
+      // 2) Try to read server response:
+      //    - If it includes a session id, use it for polling
+      //    - If it includes an array of detailed records, apply them immediately to Architect Details/Review
       let serverSession: string | null = null;
+      let immediateDetails: any[] | null = null;
+
       try {
         const data = await resp.clone().json();
-        serverSession = (data?.session || data?.session_id || data?.id || null);
-      } catch { /* response might not be JSON - ignore */ }
+        // common shapes:
+        // { session: "...", data: [...] } OR { session_id: "...", items: [...] } OR just [...]
+        if (Array.isArray(data)) immediateDetails = data;
+        if (data && typeof data === "object") {
+          serverSession = (data.session || data.session_id || data.id) ?? null;
+          if (Array.isArray(data.data)) immediateDetails = data.data;
+          if (Array.isArray(data.items)) immediateDetails = data.items;
+          if (Array.isArray(data.results)) immediateDetails = data.results;
+        }
+      } catch {
+        // not JSON? ignore
+      }
 
       const effectiveSession = (serverSession || clientSession).toString();
       setScrapeSessionId(effectiveSession);
 
-      // kick poller
+      // 3) If the scraper returned enriched details immediately, merge them now
+      if (immediateDetails && immediateDetails.length) {
+        const byId: Record<string, any> = {};
+        for (const d of immediateDetails) {
+          const id = String(d.id ?? d.architect_id ?? "");
+          if (id) byId[id] = d;
+        }
+
+        setReview(cur => cur.map(r => {
+          const d = byId[String(r.id)];
+          if (!d) return r;
+
+          // Map scraper fields → our UI fields
+          const merged: Partial<Architect> = {
+            email: d.email ?? r.email,
+            phone: d.phone ?? r.phone,
+            website: d.website ?? r.website,
+            socials: {
+              linkedin: d.linkedin_profile_url ?? d.company_linkedin_profile_url ?? r.socials?.linkedin,
+              instagram: d.instagram_profile_url ?? d.company_instagram_profile_url ?? r.socials?.instagram,
+              facebook: d.facebook_profile_url ?? d.company_facebook_profile_url ?? r.socials?.facebook,
+            },
+            address: d.address ?? r.address,
+            postcode: d.post_code ?? d.postcode ?? r.postcode,
+            company: d.company_name ?? d.company ?? r.company,
+            name: d.full_name ?? d.name ?? r.name,
+          };
+
+          return { ...r, ...merged, raw: r.raw ?? d };
+        }));
+      }
+
+      // nudge poller in case we only got session
       setTimeout(() => setScrapeTicker(t => t + 1), 1500);
     } catch (e) {
       console.error("scrape POST failed", e);
@@ -528,93 +580,55 @@ export default function ArchiFiUIFresh() {
         return;
       }
 
-      // Map upstream status per architect_id
       const byId: Record<string, string> = {};
       for (const s of arr) {
         const id = String(s.architect_id ?? s.id ?? "");
-        // keep raw upstream value as-is (e.g., "success", "inprogress", "failed")
-        const raw = String(s.status ?? "").trim();
+        const raw = String(s.status ?? "").trim(); // e.g. "success", "inprogress", "failed"
         if (id) byId[id] = raw;
       }
 
-      // Track which ones just finished so we can hydrate details
       const justFinished: string[] = [];
 
       setReview(cur => cur.map(r => {
+        const current = (r.scrape?.status ?? "idle").toLowerCase();
+        const upstreamRaw = byId[r.id] ?? byId[String(r.id)] ?? current;
+        let nextRaw = upstreamRaw;
+
+        // timeout if still in progress after 5 min
         const started = r.scrape?.startedAt ?? 0;
-        const upstreamRaw = byId[r.id] ?? byId[String(r.id)]; // may be undefined if not in this tick
-        const current = (r.scrape?.status ?? "idle").toLowerCase().trim();
-
-        // Determine next status:
-        let nextRaw = r.scrape?.status ?? "idle"; // preserve original text
-        if (typeof upstreamRaw === "string" && upstreamRaw.length) {
-          nextRaw = upstreamRaw; // keep upstream text: "success", "inprogress", "failed"
-        }
-
-        // 5-minute timeout only if still in progress
         const inProgress = (nextRaw.toLowerCase() === "inprogress");
         const overdue = inProgress && started && (Date.now() - started >= timeoutMs);
         if (overdue) nextRaw = "failed";
 
-        // Detect a fresh transition to finished ("success" or "complete")
-        const isFinished =
-          nextRaw.toLowerCase() === "success" || nextRaw.toLowerCase() === "complete";
-        const wasInProgress = current === "inprogress";
-        if (isFinished && wasInProgress) justFinished.push(r.id);
+        const finished = nextRaw.toLowerCase() === "success" || nextRaw.toLowerCase() === "complete";
+        if (finished && current === "inprogress") justFinished.push(r.id);
 
-        // No change?
         if (nextRaw === r.scrape?.status && !overdue) return r;
-
         return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: nextRaw } };
       }));
 
-      // Hydrate details for any that just finished
-      for (const id of justFinished) {
-        // Try real scraped details via DETAILS_ENDPOINT first
-        let merged: Partial<Architect> | null = null;
-        try {
-          const res = await fetch(`${DETAILS_ENDPOINT}?id=${encodeURIComponent(id)}`, { cache: "no-store" });
-          if (res.ok) {
-            const d = await res.json();
-            merged = {
-              email: d.email ?? undefined,
-              phone: d.phone ?? undefined,
-              website: d.website ?? undefined,
-              socials: {
-                linkedin: d.linkedin_profile_url ?? d.company_linkedin_profile_url ?? undefined,
-                instagram: d.instagram_profile_url ?? d.company_instagram_profile_url ?? undefined,
-                facebook: d.facebook_profile_url ?? d.company_facebook_profile_url ?? undefined,
-              },
-              address: d.address ?? undefined,
-              postcode: d.post_code ?? d.postcode ?? undefined,
-              company: d.company_name ?? d.company ?? undefined,
-              name: d.full_name ?? d.name ?? undefined,
-            };
-          }
-        } catch (_) { /* ignore */ }
-
-        // Fallback: use whatever we already have in raw to avoid empty panel
+      // Hydrate each finished card from the raw we already hold (same data we sent to scraper)
+      if (justFinished.length) {
         setReview(cur => cur.map(r => {
-          if (r.id !== id) return r;
-          if (!merged) {
-            const x = r.raw || {};
-            return {
-              ...r,
-              email: r.email || x.email || r.email,
-              phone: r.phone || x.phone || r.phone,
-              website: r.website || x.website || r.website,
-              socials: r.socials || {
-                linkedin: x.linkedin_profile_url || x.company_linkedin_profile_url || "",
-                instagram: x.instagram_profile_url || x.company_instagram_profile_url || "",
-                facebook: x.facebook_profile_url || x.company_facebook_profile_url || "",
-              },
-              address: r.address || x.address || r.address,
-              postcode: r.postcode || x.post_code || r.postcode,
-              company: r.company || x.company_name || r.company,
-              name: r.name || x.full_name || r.name,
-            };
-          }
-          // Merge enriched fields
+          if (!justFinished.includes(r.id)) return r;
+
+          const x = r.raw || {}; // what we posted to the scraper, or what it returned immediately
+
+          const merged: Partial<Architect> = {
+            email: r.email ?? x.email,
+            phone: r.phone ?? x.phone,
+            website: r.website ?? x.website,
+            socials: r.socials ?? {
+              linkedin: x.linkedin_profile_url || x.company_linkedin_profile_url || "",
+              instagram: x.instagram_profile_url || x.company_instagram_profile_url || "",
+              facebook: x.facebook_profile_url || x.company_facebook_profile_url || "",
+            },
+            address: r.address ?? x.address,
+            postcode: r.postcode ?? (x.post_code || x.postcode),
+            company: r.company ?? (x.company_name || x.company),
+            name: r.name ?? (x.full_name || x.name),
+          };
+
           return { ...r, ...merged };
         }));
       }
@@ -944,9 +958,9 @@ function ArchiDetails({ a }: { a: Architect }) {
         <Card className="p-3">
           <div className="text-sm font-medium text-neutral-700">Contact</div>
           <div className="mt-2">
-            <LabelRow icon={<Mail className="h-3.5 w-3.5" />} label="Email" value={<a className="underline" href={`mailto:${a.email}`}>{a.email}</a>} />
-            <LabelRow icon={<Phone className="h-3.5 w-3.5" />} label="Phone" value={a.phone} />
-            <LabelRow icon={<Globe className="h-3.5 w-3.5" />} label="Website" value={<a className="break-all underline" href={a.website} target="_blank" rel="noreferrer">{a.website}</a>} />
+            <LabelRow icon={<Mail className="h-3.5 w-3.5" />} label="Email" value={a.email ? <a className="underline" href={`mailto:${a.email}`}>{a.email}</a> : "-"} />
+            <LabelRow icon={<Phone className="h-3.5 w-3.5" />} label="Phone" value={a.phone || "-"} />
+            <LabelRow icon={<Globe className="h-3.5 w-3.5" />} label="Website" value={a.website ? <a className="break-all underline" href={a.website} target="_blank" rel="noreferrer">{a.website}</a> : "-"} />
           </div>
         </Card>
         <Card className="p-3 md:col-span-2">
