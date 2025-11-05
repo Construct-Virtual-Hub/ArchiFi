@@ -248,6 +248,12 @@ export default function ArchiFiUIFresh() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageItems = filtered.slice((page - 1) * pageSize, page * pageSize);
 
+  // When apiPages has content, we are in server-paginated mode (100/page from upstream).
+  // In that case render the full server page (discover) without local paging.
+  // Otherwise (mock/local), keep existing client paging via pageItems.
+  const serverPaging = apiPages.length > 0;
+  const visibleItems = serverPaging ? discover : pageItems;
+
   async function runSearch() {
     try {
       setApiError(null);
@@ -278,6 +284,7 @@ export default function ArchiFiUIFresh() {
       setApiPageIndex(0);
       setDiscover(items);
       console.log("DISCOVER items:", items.length, items.slice(0,2));
+      console.log("Visible (server page) count:", items.length);
       setActiveTab("discover");
     } catch (e: any) {
       console.error("SEARCH failed; falling back to mock:", e?.message || e);
@@ -323,6 +330,7 @@ export default function ArchiFiUIFresh() {
       setApiNextIds((p) => [...p, newNextId]);
       setApiPageIndex(idx + 1);
       setDiscover(items);
+      console.log("Visible (server page) count:", items.length);
     } catch (e) {
       console.error("Next page fetch failed:", e);
       setApiError("Could not load next page.");
@@ -351,7 +359,8 @@ export default function ArchiFiUIFresh() {
 
   function selectAllOnPage() {
     const upd: Record<string, boolean> = { ...discoverSelected };
-    pageItems.forEach((a) => (upd[a.id] = true));
+    const target = visibleItems; // use full server page (100) or client page (20) as appropriate
+    target.forEach((a) => (upd[a.id] = true));
     setDiscoverSelected(upd);
   }
 
@@ -456,7 +465,7 @@ export default function ArchiFiUIFresh() {
                 </div>
               </div>
               <div className="grid h-[calc(72vh-56px)] auto-rows-min grid-cols-1 gap-2 overflow-y-auto p-3 md:grid-cols-2 overscroll-contain">
-                {pageItems.map((a) => (
+                {visibleItems.map((a) => (
                   <motion.div key={a.id} layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
                     <Card className="p-4">
                       <div className="flex items-start justify-between gap-3">
@@ -485,7 +494,7 @@ export default function ArchiFiUIFresh() {
                     </Card>
                   </motion.div>
                 ))}
-                {pageItems.length === 0 && (
+                {visibleItems.length === 0 && (
                   <div className="flex h-full items-center justify-center text-sm text-neutral-500">
                     Hit <span className="mx-1 rounded-md bg-neutral-900 px-2 py-0.5 text-white">Search</span> to load mock results.
                   </div>
