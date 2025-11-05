@@ -79,7 +79,7 @@ type Architect = {
   grade?: string;
   address?: string; // for filtering only (may come from upstream "address")
   raw?: any; // keep original upstream row for scraping
-  scrape?: { sessionId?: string; status?: "idle" | "inprogress" | "complete" | "failed"; startedAt?: number };
+  scrape?: { sessionId?: string; status?: string; startedAt?: number }; // show raw upstream status text
 };
 
 function makeMock(n = 24): Architect[] {
@@ -436,7 +436,7 @@ export default function ArchiFiUIFresh() {
       const ids = new Set(cur.map(x => x.id));
       const merged = [...cur];
       for (const p of picked) {
-        const mark = { ...p, scrape: { sessionId: clientSession, status: "inprogress" as const, startedAt: Date.now() } };
+        const mark = { ...p, scrape: { sessionId: clientSession, status: "inprogress", startedAt: Date.now() } };
         if (!ids.has(p.id)) merged.push(mark);
         else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = mark; });
       }
@@ -511,7 +511,7 @@ export default function ArchiFiUIFresh() {
 
   // Polling effect (every ~10s while any inprogress exists)
   useEffect(() => {
-    const active = review.some(r => r.scrape?.status === "inprogress");
+    const active = review.some(r => (r.scrape?.status || "").toLowerCase().includes("progress"));
     if (!scrapeSessionId || !active) return;
 
     const timeoutMs = 5 * 60 * 1000;
@@ -528,64 +528,99 @@ export default function ArchiFiUIFresh() {
         return;
       }
 
-      const byId: Record<string,string> = {};
+      // Map upstream status per architect_id
+      const byId: Record<string, string> = {};
       for (const s of arr) {
         const id = String(s.architect_id ?? s.id ?? "");
-        const status = String(s.status || "").toLowerCase().replace(/\s+/g, "");
-        if (id) byId[id] = status; // inprogress/complete/failed
+        // keep raw upstream value as-is (e.g., "success", "inprogress", "failed")
+        const raw = String(s.status ?? "").trim();
+        if (id) byId[id] = raw;
       }
 
-      const completedIds: string[] = [];
+      // Track which ones just finished so we can hydrate details
+      const justFinished: string[] = [];
+
       setReview(cur => cur.map(r => {
         const started = r.scrape?.startedAt ?? 0;
-        const overdue = r.scrape?.status === "inprogress" && started && (Date.now() - started >= timeoutMs);
+        const upstreamRaw = byId[r.id] ?? byId[String(r.id)]; // may be undefined if not in this tick
+        const current = (r.scrape?.status ?? "idle").toLowerCase().trim();
 
-        const upstream = byId[r.id] ?? byId[String(r.id)];
-        let next = r.scrape?.status ?? "idle";
-        if (upstream === "inprogress") next = "inprogress";
-        if (upstream === "complete") next = "complete";
-        if (upstream === "failed") next = "failed";
-        if (overdue && next === "inprogress") next = "failed";
+        // Determine next status:
+        let nextRaw = r.scrape?.status ?? "idle"; // preserve original text
+        if (typeof upstreamRaw === "string" && upstreamRaw.length) {
+          nextRaw = upstreamRaw; // keep upstream text: "success", "inprogress", "failed"
+        }
 
-        if (next === "complete") completedIds.push(r.id);
+        // 5-minute timeout only if still in progress
+        const inProgress = (nextRaw.toLowerCase() === "inprogress");
+        const overdue = inProgress && started && (Date.now() - started >= timeoutMs);
+        if (overdue) nextRaw = "failed";
 
-        if (next === r.scrape?.status && !overdue) return r;
-        return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: next } };
+        // Detect a fresh transition to finished ("success" or "complete")
+        const isFinished =
+          nextRaw.toLowerCase() === "success" || nextRaw.toLowerCase() === "complete";
+        const wasInProgress = current === "inprogress";
+        if (isFinished && wasInProgress) justFinished.push(r.id);
+
+        // No change?
+        if (nextRaw === r.scrape?.status && !overdue) return r;
+
+        return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: nextRaw } };
       }));
 
-      // Hydrate each completed architect:
-      for (const id of completedIds) {
-        // Try real scraped details first
-        const patch = await fetchScrapedDetails(id);
-        if (patch) {
-          setReview(cur => cur.map(r => (r.id === id ? { ...r, ...patch } : r)));
-          continue;
-        }
-        // Fallback: at least mirror what we already have in raw (so panel shows data)
+      // Hydrate details for any that just finished
+      for (const id of justFinished) {
+        // Try real scraped details via DETAILS_ENDPOINT first
+        let merged: Partial<Architect> | null = null;
+        try {
+          const res = await fetch(`${DETAILS_ENDPOINT}?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+          if (res.ok) {
+            const d = await res.json();
+            merged = {
+              email: d.email ?? undefined,
+              phone: d.phone ?? undefined,
+              website: d.website ?? undefined,
+              socials: {
+                linkedin: d.linkedin_profile_url ?? d.company_linkedin_profile_url ?? undefined,
+                instagram: d.instagram_profile_url ?? d.company_instagram_profile_url ?? undefined,
+                facebook: d.facebook_profile_url ?? d.company_facebook_profile_url ?? undefined,
+              },
+              address: d.address ?? undefined,
+              postcode: d.post_code ?? d.postcode ?? undefined,
+              company: d.company_name ?? d.company ?? undefined,
+              name: d.full_name ?? d.name ?? undefined,
+            };
+          }
+        } catch (_) { /* ignore */ }
+
+        // Fallback: use whatever we already have in raw to avoid empty panel
         setReview(cur => cur.map(r => {
           if (r.id !== id) return r;
-
-          const x = r.raw || {};
-
-          return {
-            ...r,
-            email: r.email || x.email || r.email,
-            phone: r.phone || x.phone || r.phone,
-            website: r.website || x.website || r.website,
-            socials: r.socials || {
-              linkedin: x.linkedin_profile_url || x.company_linkedin_profile_url || "",
-              instagram: x.instagram_profile_url || x.company_instagram_profile_url || "",
-              facebook: x.facebook_profile_url || x.company_facebook_profile_url || "",
-            },
-            address: r.address || x.address || r.address,
-            postcode: r.postcode || x.post_code || r.postcode,
-            company: r.company || x.company_name || r.company,
-            name: r.name || x.full_name || r.name,
-          };
+          if (!merged) {
+            const x = r.raw || {};
+            return {
+              ...r,
+              email: r.email || x.email || r.email,
+              phone: r.phone || x.phone || r.phone,
+              website: r.website || x.website || r.website,
+              socials: r.socials || {
+                linkedin: x.linkedin_profile_url || x.company_linkedin_profile_url || "",
+                instagram: x.instagram_profile_url || x.company_instagram_profile_url || "",
+                facebook: x.facebook_profile_url || x.company_facebook_profile_url || "",
+              },
+              address: r.address || x.address || r.address,
+              postcode: r.postcode || x.post_code || r.postcode,
+              company: r.company || x.company_name || r.company,
+              name: r.name || x.full_name || r.name,
+            };
+          }
+          // Merge enriched fields
+          return { ...r, ...merged };
         }));
       }
     };
 
+    // run now & then every 10s
     tick();
     const id = setInterval(tick, 10000);
     return () => clearInterval(id);
@@ -762,13 +797,14 @@ export default function ArchiFiUIFresh() {
                           <div className="mt-1 text-xs">
                             <span className="text-neutral-500">Scrape: </span>
                             <span className={
-                              a.scrape?.status === "complete" ? "text-green-600" :
-                              a.scrape?.status === "failed" ? "text-red-600" :
-                              "text-amber-600"
+                              (a.scrape?.status || "").toLowerCase() === "success" ? "text-green-600" :
+                              (a.scrape?.status || "").toLowerCase().includes("progress") ? "text-amber-600" :
+                              (a.scrape?.status || "").toLowerCase() === "failed" ? "text-red-600" :
+                              "text-neutral-600"
                             }>
-                              {a.scrape?.status ? a.scrape.status.replace(/inprogress/,"in progress") : "idle"}
+                              {a.scrape?.status || "idle"}
                             </span>
-                            {a.scrape?.status === "failed" && (
+                            { (a.scrape?.status || "").toLowerCase() === "failed" && (
                               <button
                                 className="ml-2 rounded-lg border border-neutral-300 px-2 py-0.5 text-[11px] hover:bg-neutral-50"
                                 onClick={(e) => {
