@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 // â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”
 // ArchiFi â€“ Fresh Build (fixed)
 // Premium Tailwind + shadcn-like primitives (implemented inline for portability)
-// No horizontal overflow. Side library fixed. Three tabs: Discover â€¢ Review â€¢ Outreach
+// No horizontal overflow. Side library fixed. Three tabs: Discover • Review • Outreach
 // Mock data is loaded only when the user hits the Search button.
 // "Scrape Details" moves the selected cards from Discover â†’ Review.
 // Outreach supports per-card platform selection.
@@ -247,7 +247,7 @@ export default function ArchiFiUIFresh() {
                   <div className="truncate font-medium text-neutral-800">{a.name}</div>
                   <span className="rounded-md bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">Grade {a.grade}</span>
                 </div>
-                <div className="mt-1 text-xs text-neutral-500 truncate">{a.city} â€¢ {a.postcode}</div>
+                <div className="mt-1 text-xs text-neutral-500 truncate">{a.city} • {a.postcode}</div>
                 <div className="mt-2 flex items-center justify-between">
                   <span className="text-xs text-neutral-500">{a.company}</span>
                   <Btn variant="ghost" className="h-8 px-3 text-xs">Add to Review</Btn>
@@ -283,7 +283,7 @@ export default function ArchiFiUIFresh() {
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                            <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{a.city} â€¢ {a.postcode}</span>
+                            <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{a.city} • {a.postcode}</span>
                             <span className="flex items-center gap-1"><Building2 className="h-3.5 w-3.5" />{a.company}</span>
                           </div>
                           <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-neutral-600 sm:grid-cols-3">
@@ -352,8 +352,8 @@ export default function ArchiFiUIFresh() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
-                          <div className="mt-1 text-xs text-neutral-500">{a.city} â€¢ {a.postcode}</div>
-                          <div className="mt-1 text-xs text-neutral-500">Grade {a.grade} â€¢ {a.company}</div>
+                          <div className="mt-1 text-xs text-neutral-500">{a.city} • {a.postcode}</div>
+                          <div className="mt-1 text-xs text-neutral-500">Grade {a.grade} • {a.company}</div>
                         </div>
                         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
                           <input onClick={(e)=>e.stopPropagation()} type="checkbox" checked={!!reviewSelected[a.id]} onChange={() => setReviewSelected(p=>({ ...p, [a.id]: !p[a.id] }))} className="h-4 w-4 rounded border-neutral-300 accent-neutral-900" />
@@ -404,7 +404,7 @@ export default function ArchiFiUIFresh() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
-                        <div className="mt-1 text-xs text-neutral-500">{a.city} â€¢ {a.postcode}</div>
+                        <div className="mt-1 text-xs text-neutral-500">{a.city} • {a.postcode}</div>
                         <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-neutral-600">
                           <div className="truncate">Company: {a.company}</div>
                           <div className="truncate">Specialty: {a.specialty}</div>
@@ -460,7 +460,7 @@ function ArchiDetails({ a }: { a: Architect }) {
         <Card className="p-3">
           <div className="text-sm font-medium text-neutral-700">Essentials</div>
           <div className="mt-2">
-            <LabelRow icon={<MapPin className="h-3.5 w-3.5" />} label="Location" value={`${a.city} â€¢ ${a.postcode}`} />
+            <LabelRow icon={<MapPin className="h-3.5 w-3.5" />} label="Location" value={`${a.city} • ${a.postcode}`} />
             <LabelRow icon={<DollarSign className="h-3.5 w-3.5" />} label="Project Value" value={`${a.valueMillions}m`} />
             <LabelRow icon={<User className="h-3.5 w-3.5" />} label="Specialty" value={a.specialty} />
             <LabelRow icon={<Building2 className="h-3.5 w-3.5" />} label="Project Type" value={a.projectType} />
