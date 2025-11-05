@@ -127,8 +127,7 @@ function runSelfTests() {
 runSelfTests();
 
 // === API integration (Discover) ===
-const SEARCH_ENDPOINT =
-  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
+const SEARCH_ENDPOINT = "/api/search";
 
 type ApiItem = any; // defensive: map fields below
 type ApiResponse = { items?: ApiItem[]; nextId?: number | null; hasMore?: boolean };
