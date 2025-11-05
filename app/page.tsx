@@ -90,6 +90,60 @@ function patchFromScrape(d: any): Partial<Architect> | null {
   } as Partial<Architect>;
 }
 
+function mapScrapeToPatch(d: any): Partial<Architect> | null {
+  if (!d || typeof d !== "object") return null;
+
+  const clean = (v: any) => (v === "" || v === null || v === undefined ? undefined : v);
+
+  const patch: Partial<Architect> = {
+    // prefer scraped names when present
+    full_name: clean(d.full_name),
+    company_name: clean(d.company_name),
+
+    // contacts
+    email: clean(d.email),
+    phone: clean(d.phone),
+    website: clean(d.website),
+    alternate_phone: clean(d.alternate_phone),
+    alternate_email: clean(d.alternate_email),
+
+    // address
+    address: clean(d.address),
+    alternate_address: clean(d.alternate_address),
+    country: clean(d.country),
+    post_code: clean(d.post_code),
+    post_code_area: clean(d.post_code_area),
+
+    // socials
+    linkedin_profile_url: clean(d.linkedin_profile_url),
+    instagram_profile_url: clean(d.instagram_profile_url),
+    facebook_profile_url: clean(d.facebook_profile_url),
+
+    company_linkedin_profile_url: clean(d.company_linkedin_profile_url),
+    company_instagram_profile_url: clean(d.company_instagram_profile_url),
+    company_facebook_profile_url: clean(d.company_facebook_profile_url),
+
+    // profiles / meta
+    company_bio: clean(d.company_bio),
+    notes: clean(d.notes),
+    bio: clean(d.bio),
+    registration_number: clean(d.registration_number),
+    registration_link: clean(d.registration_link),
+
+    // arrays / timestamps
+    past_projects: Array.isArray(d.past_projects) ? d.past_projects : undefined,
+    created_at: clean(d.created_at),
+    last_scraped: clean(d.last_scraped),
+
+    // keep original raw
+    raw: d,
+  };
+
+  // Remove undefined keys (to avoid clobbering)
+  Object.keys(patch).forEach(k => (patch as any)[k] === undefined && delete (patch as any)[k]);
+  return Object.keys(patch).length ? patch : null;
+}
+
 type Architect = {
   id: string;
   name: string;
@@ -111,6 +165,39 @@ type Architect = {
     status?: string; // keep raw upstream status text (e.g., "success", "inprogress", "failed")
     startedAt?: number;
   };
+
+  // NEW – scraped/enriched fields (all optional; render only when truthy)
+  full_name?: string;
+  company_name?: string;
+
+  linkedin_profile_url?: string;
+  instagram_profile_url?: string;
+  facebook_profile_url?: string;
+
+  company_linkedin_profile_url?: string;
+  company_instagram_profile_url?: string;
+  company_facebook_profile_url?: string;
+
+  company_bio?: string;
+  notes?: string;
+
+  address?: string;
+  alternate_address?: string;
+  country?: string;
+
+  post_code?: string;
+  post_code_area?: string;
+
+  alternate_phone?: string;
+  alternate_email?: string;
+
+  registration_number?: string;
+  registration_link?: string;
+
+  bio?: string;
+  past_projects?: any[]; // string[] or richer objects; we'll render strings safely
+  created_at?: string;
+  last_scraped?: string;
 };
 
 function makeMock(n = 24): Architect[] {
@@ -520,15 +607,15 @@ export default function ArchiFiUIFresh() {
       if (immediateDetails && immediateDetails.length) {
         const byId: Record<string, any> = {};
         for (const d of immediateDetails) {
-          const id = String(d.id ?? d.architect_id ?? "");
-          if (id) byId[id] = d;
+          const key = String(d.id ?? d.architect_id ?? "");
+          if (key) byId[key] = d;
         }
 
         setReview(cur => cur.map(r => {
           const d = byId[String(r.id)];
           if (!d) return r;
 
-          const patch = patchFromScrape(d);
+          const patch = mapScrapeToPatch(d);
           return patch ? { ...r, ...patch } : r;
         }));
       }
@@ -994,23 +1081,98 @@ function ArchiDetails({ a }: { a: Architect }) {
         <Card className="p-3 md:col-span-2">
           <div className="text-sm font-medium text-neutral-700">Socials</div>
           <div className="mt-3 flex flex-wrap gap-2">
-            {a.socials?.linkedin && (
-              <a href={a.socials.linkedin} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
+            {(a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url) && (
+              <a href={a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
                 <LinkIcon className="h-3.5 w-3.5" /> LinkedIn
               </a>
             )}
-            {a.socials?.instagram && (
-              <a href={a.socials.instagram} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
+            {(a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url) && (
+              <a href={a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
                 <LinkIcon className="h-3.5 w-3.5" /> Instagram
               </a>
             )}
-            {a.socials?.facebook && (
-              <a href={a.socials.facebook} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
+            {(a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url) && (
+              <a href={a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
                 <LinkIcon className="h-3.5 w-3.5" /> Facebook
               </a>
             )}
           </div>
         </Card>
+
+        {/* --- Company Bio (if present) --- */}
+        {(a.company_bio || a.bio) && (
+          <Card className="p-4">
+            <div className="text-sm font-medium text-neutral-700 mb-2">Company / Profile Bio</div>
+            <div className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
+              {a.company_bio || a.bio}
+            </div>
+          </Card>
+        )}
+
+        {/* --- Registration (if present) --- */}
+        {(a.registration_number || a.registration_link) && (
+          <Card className="p-4">
+            <div className="text-sm font-medium text-neutral-700 mb-2">Registration</div>
+            <div className="text-sm text-neutral-700 space-y-1">
+              {a.registration_number && (
+                <div><span className="text-neutral-500">Number:</span> {a.registration_number}</div>
+              )}
+              {a.registration_link && (
+                <div>
+                  <span className="text-neutral-500">Link:</span>{" "}
+                  <a href={a.registration_link} target="_blank" rel="noreferrer" className="underline break-all">{a.registration_link}</a>
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
+
+        {/* --- Addresses (if present) --- */}
+        {(a.address || a.alternate_address || a.country || a.post_code || a.post_code_area) && (
+          <Card className="p-4">
+            <div className="text-sm font-medium text-neutral-700 mb-2">Addresses</div>
+            <div className="text-sm text-neutral-700 space-y-1">
+              {a.address && (<div><span className="text-neutral-500">Primary:</span> {a.address}</div>)}
+              {a.alternate_address && (<div><span className="text-neutral-500">Alternate:</span> {a.alternate_address}</div>)}
+              <div className="flex flex-wrap gap-x-6 gap-y-1">
+                {a.country && (<div><span className="text-neutral-500">Country:</span> {a.country}</div>)}
+                {a.post_code && (<div><span className="text-neutral-500">Postcode:</span> {a.post_code}</div>)}
+                {a.post_code_area && (<div><span className="text-neutral-500">Postcode Area:</span> {a.post_code_area}</div>)}
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* --- Notes (if present) --- */}
+        {a.notes && (
+          <Card className="p-4">
+            <div className="text-sm font-medium text-neutral-700 mb-2">Notes</div>
+            <div className="text-sm text-neutral-700 whitespace-pre-wrap">{a.notes}</div>
+          </Card>
+        )}
+
+        {/* --- Past Projects (if present) --- */}
+        {Array.isArray(a.past_projects) && a.past_projects.length > 0 && (
+          <Card className="p-4">
+            <div className="text-sm font-medium text-neutral-700 mb-2">Past Projects</div>
+            <ul className="list-disc pl-5 text-sm text-neutral-700 space-y-1">
+              {a.past_projects.map((p, i) => (
+                <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>
+              ))}
+            </ul>
+          </Card>
+        )}
+
+        {/* --- Metadata (if present) --- */}
+        {(a.created_at || a.last_scraped) && (
+          <Card className="p-4">
+            <div className="text-sm font-medium text-neutral-700 mb-2">Metadata</div>
+            <div className="text-sm text-neutral-700 space-y-1">
+              {a.created_at && (<div><span className="text-neutral-500">Created:</span> {new Date(a.created_at).toLocaleString()}</div>)}
+              {a.last_scraped && (<div><span className="text-neutral-500">Last Scraped:</span> {new Date(a.last_scraped).toLocaleString()}</div>)}
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );
