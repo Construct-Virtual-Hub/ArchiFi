@@ -453,12 +453,30 @@ export default function ArchiFiUIFresh() {
       address: p.address,
     });
 
-    postJSON(SCRAPE_ENDPOINT, payload)
-      .then(() => setTimeout(() => {/* let poller pick it up */}, 1500))
-      .catch((e) => {
-        console.error("scrape POST failed", e);
-        setReview(cur => cur.map(r => picked.some(p=>p.id===r.id) ? { ...r, scrape: { sessionId: session, status: "failed", startedAt: r.scrape?.startedAt || Date.now() } } : r));
-      });
+    try {
+      const resp = await postJSON(SCRAPE_ENDPOINT, payload);
+
+      // try to read session id from server
+      let serverSession: string | null = null;
+      try {
+        const data = await resp.clone().json();
+        serverSession = (data?.session || data?.session_id || data?.id || null);
+      } catch { /* server might return empty/plain text; ignore */ }
+
+      const effective = (serverSession || session).toString().trim();
+      if (effective !== scrapeSessionId) setScrapeSessionId(effective);
+
+      // nudge poller
+      setTimeout(() => setScrapeTicker(t => t + 1), 1500);
+    } catch (e) {
+      console.error("scrape POST failed", e);
+      setReview(cur =>
+        cur.map(r => picked.some(p => p.id === r.id)
+          ? { ...r, scrape: { sessionId: session, status: "failed", startedAt: r.scrape?.startedAt || Date.now() } }
+          : r
+        )
+      );
+    }
   }
 
   const [outreachPlatform, setOutreachPlatform] = useState<Record<string, string>>({});
@@ -469,53 +487,46 @@ export default function ArchiFiUIFresh() {
     const active = review.some(r => r.scrape?.status === "inprogress");
     if (!scrapeSessionId || !active) return;
 
-    let cancelled = false;
     const timeoutMs = 5 * 60 * 1000;
 
     const tick = async () => {
       try {
-        const url = `${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(scrapeSessionId)}`;
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) {
-          console.warn("status poll failed:", res.status);
-          return; // tolerate 404/500 and try again next tick
-        }
+        const res = await fetch(`${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(scrapeSessionId)}`, { cache: "no-store" });
+        if (!res.ok) { console.warn("status poll failed:", res.status); return; }
         const arr = await res.json();
         if (!Array.isArray(arr)) return;
 
-        const byId: Record<string, string> = {};
+        const byId: Record<string,string> = {};
         for (const s of arr) {
           const id = String(s.architect_id ?? s.id ?? "");
-          const status = String(s.status || "").toLowerCase();
-          if (id) byId[id] = status;
+          const status = String(s.status || "").toLowerCase().replace(/\s+/g, "");
+          if (id) byId[id] = status; // inprogress/complete/failed
         }
 
         setReview(cur => cur.map(r => {
-          // timeout enforcement
           const started = r.scrape?.startedAt ?? 0;
           const overdue = r.scrape?.status === "inprogress" && started && (Date.now() - started >= timeoutMs);
 
-          // map status from upstream if present
           const upstream = byId[r.id] ?? byId[String(r.id)];
-          let nextStatus = r.scrape?.status ?? "idle";
-          if (upstream === "inprogress") nextStatus = "inprogress";
-          if (upstream === "complete") nextStatus = "complete";
-          if (upstream === "failed") nextStatus = "failed";
-          if (overdue && nextStatus === "inprogress") nextStatus = "failed";
+          let next = r.scrape?.status ?? "idle";
+          if (upstream === "inprogress") next = "inprogress";
+          if (upstream === "complete") next = "complete";
+          if (upstream === "failed") next = "failed";
+          if (overdue && next === "inprogress") next = "failed";
 
-          if (nextStatus === r.scrape?.status && !overdue) return r;
-          return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: nextStatus } };
+          if (next === r.scrape?.status && !overdue) return r;
+          return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: next } };
         }));
       } catch (e) {
         console.warn("status poll error", e);
       }
     };
 
-    // start now then every 10s
+    // run now & poll every 10s
     tick();
     const id = setInterval(tick, 10000);
-    return () => { clearInterval(id); };
-  }, [scrapeSessionId, review.length]);
+    return () => clearInterval(id);
+  }, [scrapeSessionId, review.length, scrapeTicker]);
 
   function clearReview() {
     setReview([]);
