@@ -20,10 +20,16 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const session = url.searchParams.get("session");
-    if (!session) return new Response(JSON.stringify({ error: "missing session" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
+    if (!session) {
+      return new Response(JSON.stringify({ error: "missing session" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json; charset=utf-8", ...CORS },
+      });
+    }
 
     const upstreamURL = `${UPSTREAM_STATUS_BASE}?session=${encodeURIComponent(session)}`;
     const upstream = await fetch(upstreamURL, { cache: "no-store", next: { revalidate: 0 } });
+
     const text = await upstream.text();
     const type = upstream.headers.get("content-type") ?? "application/json; charset=utf-8";
     return new Response(text, { status: upstream.status, headers: { "Content-Type": type, ...CORS } });
@@ -34,4 +40,3 @@ export async function GET(req: Request) {
     });
   }
 }
-

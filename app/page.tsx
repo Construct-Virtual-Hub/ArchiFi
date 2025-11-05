@@ -77,7 +77,7 @@ type Architect = {
   grade?: string;
   address?: string; // for filtering only (may come from upstream "address")
   raw?: any; // keep original upstream row for scraping
-  scrape?: { sessionId?: string; status?: "idle" | "inprogress" | "complete" | "failed" };
+  scrape?: { sessionId?: string; status?: "idle" | "inprogress" | "complete" | "failed"; startedAt?: number };
 };
 
 function makeMock(n = 24): Architect[] {
@@ -423,45 +423,42 @@ export default function ArchiFiUIFresh() {
   }
 
   async function scrapeDetails() {
-    // existing logic that moved selected Discover -> Review stays as-is
     const picked = discover.filter((a) => discoverSelected[a.id]);
-    const existing = new Set(review.map((r) => r.id));
-    const merged = [...review, ...picked.filter((p) => !existing.has(p.id))];
+    if (!picked.length) return;
 
-    // Mark as in progress locally
     const session = `session-scrape-${Date.now()}`;
-    const updated = merged.map(r => existing.has(r.id) ? r : { ...r, scrape: { sessionId: session, status: "inprogress" as const } });
 
-    setReview(updated);
-    setActiveTab("review");
-    if (updated.length) setDetailsId(updated[0].id);
-
-    // Prepare body the upstream expects: array of raw records (fallback to minimal shape)
-    const payload = picked.map((p, i) => {
-      const x = p.raw || {};
-      return Object.keys(x).length ? x : {
-        id: Number(p.id) || p.id,
-        full_name: p.name,
-        company_name: p.company,
-        email: p.email,
-        phone: p.phone,
-        website: p.website,
-        post_code: p.postcode,
-        address: p.address,
-      };
+    // add/move to review + mark inprogress with startedAt
+    setReview(cur => {
+      const ids = new Set(cur.map(x => x.id));
+      const merged = [...cur];
+      for (const p of picked) {
+        if (!ids.has(p.id)) merged.push({ ...p, scrape: { sessionId: session, status: "inprogress", startedAt: Date.now() } });
+        else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = { ...x, scrape: { sessionId: session, status: "inprogress", startedAt: Date.now() } }; });
+      }
+      return merged;
     });
-
+    setActiveTab("review");
     setScrapeSessionId(session);
 
-    try {
-      await postJSON(SCRAPE_ENDPOINT, payload); // fire-and-forget; upstream is async
-      // start polling after a brief delay to give the session time to register
-      setTimeout(() => setScrapeTicker(t => t + 1), 2000);
-    } catch (e) {
-      console.error("scrape kick-off failed", e);
-      // mark as failed
-      setReview(cur => cur.map(r => picked.some(p=>p.id===r.id) ? { ...r, scrape: { sessionId: session, status: "failed" } } : r));
-    }
+    // upstream expects an array of full records
+    const payload = picked.map((p) => p.raw && Object.keys(p.raw).length ? p.raw : {
+      id: Number(p.id) || p.id,
+      full_name: p.name,
+      company_name: p.company,
+      email: p.email,
+      phone: p.phone,
+      website: p.website,
+      post_code: p.postcode,
+      address: p.address,
+    });
+
+    postJSON(SCRAPE_ENDPOINT, payload)
+      .then(() => setTimeout(() => {/* let poller pick it up */}, 1500))
+      .catch((e) => {
+        console.error("scrape POST failed", e);
+        setReview(cur => cur.map(r => picked.some(p=>p.id===r.id) ? { ...r, scrape: { sessionId: session, status: "failed", startedAt: r.scrape?.startedAt || Date.now() } } : r));
+      });
   }
 
   const [outreachPlatform, setOutreachPlatform] = useState<Record<string, string>>({});
@@ -473,46 +470,52 @@ export default function ArchiFiUIFresh() {
     if (!scrapeSessionId || !active) return;
 
     let cancelled = false;
+    const timeoutMs = 5 * 60 * 1000;
+
     const tick = async () => {
       try {
         const url = `${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(scrapeSessionId)}`;
         const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) throw new Error(`status http ${res.status}`);
-        const arr = await res.json(); // expected array
+        if (!res.ok) {
+          console.warn("status poll failed:", res.status);
+          return; // tolerate 404/500 and try again next tick
+        }
+        const arr = await res.json();
         if (!Array.isArray(arr)) return;
 
-        // Update statuses by architect_id
-        setReview(cur => {
-          const byId: Record<string, string> = {};
-          for (const s of arr) {
-            const id = String(s.architect_id ?? s.id ?? "");
-            const status = String(s.status || "").toLowerCase(); // inprogress/complete/failed
-            if (id) byId[id] = status;
-          }
-          if (!Object.keys(byId).length) return cur;
+        const byId: Record<string, string> = {};
+        for (const s of arr) {
+          const id = String(s.architect_id ?? s.id ?? "");
+          const status = String(s.status || "").toLowerCase();
+          if (id) byId[id] = status;
+        }
 
-          return cur.map(r => {
-            // Try both numeric and string id matches
-            const key = byId[r.id] ?? byId[String(r.id)] ?? null;
-            if (!key) return r;
+        setReview(cur => cur.map(r => {
+          // timeout enforcement
+          const started = r.scrape?.startedAt ?? 0;
+          const overdue = r.scrape?.status === "inprogress" && started && (Date.now() - started >= timeoutMs);
 
-            const mapped = key === "inprogress" ? "inprogress" :
-                           key === "complete" ? "complete" :
-                           key === "failed" ? "failed" : r.scrape?.status ?? "idle";
+          // map status from upstream if present
+          const upstream = byId[r.id] ?? byId[String(r.id)];
+          let nextStatus = r.scrape?.status ?? "idle";
+          if (upstream === "inprogress") nextStatus = "inprogress";
+          if (upstream === "complete") nextStatus = "complete";
+          if (upstream === "failed") nextStatus = "failed";
+          if (overdue && nextStatus === "inprogress") nextStatus = "failed";
 
-            return { ...r, scrape: { sessionId: scrapeSessionId, status: mapped as any } };
-          });
-        });
+          if (nextStatus === r.scrape?.status && !overdue) return r;
+          return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: nextStatus } };
+        }));
       } catch (e) {
-        console.warn("status poll failed", e);
+        console.warn("status poll error", e);
       }
     };
 
-    // poll immediately, then every 10s
+    // start now then every 10s
     tick();
     const id = setInterval(tick, 10000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [scrapeSessionId, review.length, scrapeTicker]);
+    return () => { clearInterval(id); };
+  }, [scrapeSessionId, review.length]);
 
   function clearReview() {
     setReview([]);
@@ -706,7 +709,7 @@ export default function ArchiFiUIFresh() {
                                     post_code: a.postcode, address: a.address
                                   }];
                                   // mark as inprogress
-                                  setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "inprogress" } } : r));
+                                  setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "inprogress", startedAt: Date.now() } } : r));
                                   postJSON(SCRAPE_ENDPOINT, body).then(() => setTimeout(()=>setScrapeTicker(t=>t+1), 1500)).catch(() => {
                                     setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "failed" } } : r));
                                   });
