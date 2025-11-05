@@ -431,7 +431,7 @@ export default function ArchiFiUIFresh() {
 
     const clientSession = `session-scrape-${Date.now()}`;
 
-    // move to Review + mark in progress
+    // move/mark
     setReview(cur => {
       const ids = new Set(cur.map(x => x.id));
       const merged = [...cur];
@@ -444,31 +444,33 @@ export default function ArchiFiUIFresh() {
     });
     setActiveTab("review");
 
-    // body: send the raw row if present, else a minimal object
-    const payload = picked.map(p => (p.raw && Object.keys(p.raw).length ? p.raw : {
-      id: Number(p.id) || p.id,
-      full_name: p.name,
-      company_name: p.company,
-      email: p.email,
-      phone: p.phone,
-      website: p.website,
-      post_code: p.postcode,
-      address: p.address,
-    }));
+    const payload = picked.map(p =>
+      p.raw && Object.keys(p.raw).length ? p.raw : {
+        id: Number(p.id) || p.id,
+        full_name: p.name,
+        company_name: p.company,
+        email: p.email,
+        phone: p.phone,
+        website: p.website,
+        post_code: p.postcode,
+        address: p.address,
+      }
+    );
 
     try {
       const resp = await postJSON(SCRAPE_ENDPOINT, payload);
 
-      // prefer server-provided session id
+      // prefer session returned by backend
       let serverSession: string | null = null;
       try {
         const data = await resp.clone().json();
         serverSession = (data?.session || data?.session_id || data?.id || null);
-      } catch {}
+      } catch { /* response might not be JSON - ignore */ }
 
       const effectiveSession = (serverSession || clientSession).toString();
-
       setScrapeSessionId(effectiveSession);
+
+      // kick poller
       setTimeout(() => setScrapeTicker(t => t + 1), 1500);
     } catch (e) {
       console.error("scrape POST failed", e);
@@ -480,12 +482,11 @@ export default function ArchiFiUIFresh() {
     }
   }
 
-  async function fetchDetailsFor(archId: string): Promise<Partial<Architect> | null> {
+  async function fetchScrapedDetails(archId: string): Promise<Partial<Architect> | null> {
     try {
       const res = await fetch(`${DETAILS_ENDPOINT}?id=${encodeURIComponent(archId)}`, { cache: "no-store" });
-      if (!res.ok) { console.warn("details fetch skipped:", res.status); return null; }
+      if (!res.ok) return null; // details endpoint not configured or not available
       const d = await res.json();
-      // Map fields that might be returned after scraping:
       return {
         email: d.email ?? undefined,
         phone: d.phone ?? undefined,
@@ -500,8 +501,7 @@ export default function ArchiFiUIFresh() {
         company: d.company_name ?? d.company ?? undefined,
         name: d.full_name ?? d.name ?? undefined,
       };
-    } catch (e) {
-      console.warn("details fetch error", e);
+    } catch {
       return null;
     }
   }
@@ -535,7 +535,6 @@ export default function ArchiFiUIFresh() {
         if (id) byId[id] = status; // inprogress/complete/failed
       }
 
-      // Update statuses and refresh details for completed ones
       const completedIds: string[] = [];
       setReview(cur => cur.map(r => {
         const started = r.scrape?.startedAt ?? 0;
@@ -554,12 +553,36 @@ export default function ArchiFiUIFresh() {
         return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: next } };
       }));
 
-      // Hydrate details (if endpoint configured)
+      // Hydrate each completed architect:
       for (const id of completedIds) {
-        const patch = await fetchDetailsFor(id);
-        if (!patch) continue;
-        setReview(cur => cur.map(r => (r.id === id ? { ...r, ...patch } : r)));
-        // If the currently selected details panel is this id, make sure panel shows updates (state already bound)
+        // Try real scraped details first
+        const patch = await fetchScrapedDetails(id);
+        if (patch) {
+          setReview(cur => cur.map(r => (r.id === id ? { ...r, ...patch } : r)));
+          continue;
+        }
+        // Fallback: at least mirror what we already have in raw (so panel shows data)
+        setReview(cur => cur.map(r => {
+          if (r.id !== id) return r;
+
+          const x = r.raw || {};
+
+          return {
+            ...r,
+            email: r.email || x.email || r.email,
+            phone: r.phone || x.phone || r.phone,
+            website: r.website || x.website || r.website,
+            socials: r.socials || {
+              linkedin: x.linkedin_profile_url || x.company_linkedin_profile_url || "",
+              instagram: x.instagram_profile_url || x.company_instagram_profile_url || "",
+              facebook: x.facebook_profile_url || x.company_facebook_profile_url || "",
+            },
+            address: r.address || x.address || r.address,
+            postcode: r.postcode || x.post_code || r.postcode,
+            company: r.company || x.company_name || r.company,
+            name: r.name || x.full_name || r.name,
+          };
+        }));
       }
     };
 
