@@ -73,8 +73,9 @@ type Architect = {
   socials?: { linkedin?: string; instagram?: string; facebook?: string };
   specialty: string;
   projectType: string;
-  valueMillions: number; // 0â€“5
+  valueMillions: number; // 0â€"5
   grade?: string;
+  address?: string; // for filtering only (may come from upstream "address")
 };
 
 function makeMock(n = 24): Architect[] {
@@ -148,31 +149,24 @@ async function postJSON(url: string, body: any, timeoutMs = 20000): Promise<Resp
 }
 
 function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
-  // Your upstream sample shows fields like:
-  // id, full_name, company_name, post_code, address, country, created_at, socials *_url etc.
   const name =
-    x.full_name ??
-    x.name ??
-    x.architectName ??
-    `Architect ${i + 1}`;
+    x.full_name ?? x.name ?? x.architectName ?? `Architect ${i + 1}`;
 
   const company =
-    x.company_name ??
-    x.company ??
-    x.companyName ??
-    "";
+    x.company_name ?? x.company ?? x.companyName ?? "";
 
   const postcode =
-    x.post_code ??
-    x.postcode ??
-    x.post_code ??
-    "";
+    x.post_code ?? x.postcode ?? "";
 
-  // Try to infer city from address if present; otherwise blank
+  const address: string =
+    (typeof x.address === "string" && x.address) ? x.address : "";
+
+  // Prefer explicit city/town; otherwise try to infer from address
   let city = x.city ?? x.town ?? "";
-  if (!city && typeof x.address === "string") {
-    // naive: first token before comma
-    city = String(x.address).split(",")[0]?.trim() || "";
+  if (!city && address) {
+    // naive: use first comma-separated token if it looks like a city word
+    const token = address.split(",")[0]?.trim() || "";
+    if (token && /^[A-Za-z\s'-]{2,}$/.test(token)) city = token;
   }
 
   const email =
@@ -201,19 +195,33 @@ function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
     projectType: x.projectType ?? x.type ?? "New Build",
     valueMillions: Number.isFinite(x.valueMillions) ? Number(x.valueMillions) : 0,
     grade: x.grade ?? ["A", "B", "C"][i % 3],
+    address, // NEW
   };
 }
 
 // Apply local filters (job type + value range) and optional query guard
-function applyClientFilters(items: Architect[], query: string, jobType: string, vMin: number, vMax: number): Architect[] {
+function applyClientFilters(
+  items: Architect[],
+  query: string,
+  jobType: string,
+  vMin: number,
+  vMax: number
+): Architect[] {
   const q = (query || "").trim().toLowerCase();
   return items.filter(a => {
     const byJob = jobType === "All Job Types" ? true : a.projectType === jobType;
     const byVal = a.valueMillions >= vMin && a.valueMillions <= vMax;
-    const byQuery = !q ? true : (
-      (a.city || "").toLowerCase().includes(q) ||
-      (a.postcode || "").toLowerCase().includes(q)
-    );
+
+    // match against city, postcode, address, or company
+    const haystacks = [
+      a.city || "",
+      a.postcode || "",
+      a.address || "",
+      a.company || "",
+    ].map(s => s.toLowerCase());
+
+    const byQuery = !q ? true : haystacks.some(s => s.includes(q));
+
     return byJob && byVal && byQuery;
   });
 }
