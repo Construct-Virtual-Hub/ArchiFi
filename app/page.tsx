@@ -96,59 +96,59 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
   const clean = (v: any) => (v === "" || v === null || v === undefined ? undefined : v);
 
   const patch: Partial<Architect> = {
-    // prefer scraped names when present
+    // identity (optional)
     full_name: clean(d.full_name),
     company_name: clean(d.company_name),
 
-    // contacts
+    // contacts (only set when present)
     email: clean(d.email),
     phone: clean(d.phone),
     website: clean(d.website),
     alternate_phone: clean(d.alternate_phone),
     alternate_email: clean(d.alternate_email),
 
-    // address
-    address: clean(d.address),
+    // address/geo
+    address: clean(d.address) ?? undefined,
     alternate_address: clean(d.alternate_address),
     country: clean(d.country),
     post_code: clean(d.post_code),
     post_code_area: clean(d.post_code_area),
 
-    // socials
+    // socials (store raw links; UI already renders buttons)
     linkedin_profile_url: clean(d.linkedin_profile_url),
     instagram_profile_url: clean(d.instagram_profile_url),
     facebook_profile_url: clean(d.facebook_profile_url),
-
     company_linkedin_profile_url: clean(d.company_linkedin_profile_url),
     company_instagram_profile_url: clean(d.company_instagram_profile_url),
     company_facebook_profile_url: clean(d.company_facebook_profile_url),
 
-    // profiles / meta
+    // narrative / registry
     company_bio: clean(d.company_bio),
     notes: clean(d.notes),
     bio: clean(d.bio),
     registration_number: clean(d.registration_number),
     registration_link: clean(d.registration_link),
 
-    // arrays / timestamps
+    // extras
     past_projects: Array.isArray(d.past_projects) ? d.past_projects : undefined,
     created_at: clean(d.created_at),
     last_scraped: clean(d.last_scraped),
 
-    // keep original raw
+    // keep the full record
     raw: d,
   };
 
-  // Remove undefined keys (to avoid clobbering)
+  // strip undefined so we don't clobber existing non-empty fields
   Object.keys(patch).forEach(k => (patch as any)[k] === undefined && delete (patch as any)[k]);
   return Object.keys(patch).length ? patch : null;
 }
 
 type Architect = {
+  // base fields already used by the UI
   id: string;
   name: string;
   city: string;
-  postcode: string;
+  postcode: string;               // UI primary postcode
   company: string;
   email?: string;
   phone?: string;
@@ -158,44 +158,48 @@ type Architect = {
   projectType?: string;
   valueMillions?: number;
   grade?: string;
-  address?: string;
-  raw?: any; // original record we send for scraping
-  scrape?: {
-    sessionId?: string;
-    status?: string; // keep raw upstream status text (e.g., "success", "inprogress", "failed")
-    startedAt?: number;
-  };
+  address?: string;               // keep ONLY ONE 'address' key
 
-  // NEW – scraped/enriched fields (all optional; render only when truthy)
+  // system fields
+  raw?: any;
+  scrape?: { sessionId?: string; status?: string; startedAt?: number };
+
+  // SCRAPE-ONLY (optional) — names do NOT collide with base keys
+  // identity
   full_name?: string;
   company_name?: string;
 
+  // personal socials (do not replace 'socials' object)
   linkedin_profile_url?: string;
   instagram_profile_url?: string;
   facebook_profile_url?: string;
 
+  // company socials
   company_linkedin_profile_url?: string;
   company_instagram_profile_url?: string;
   company_facebook_profile_url?: string;
 
+  // narrative
   company_bio?: string;
   notes?: string;
+  bio?: string;
 
-  address?: string;
+  // addresses / geo hints
   alternate_address?: string;
   country?: string;
-
-  post_code?: string;
+  post_code?: string;             // raw scraped field (kept separate from UI 'postcode')
   post_code_area?: string;
 
+  // alternates
   alternate_phone?: string;
   alternate_email?: string;
 
+  // registry
   registration_number?: string;
   registration_link?: string;
 
-  bio?: string;
-  past_projects?: any[]; // string[] or richer objects; we'll render strings safely
+  // arrays / timestamps
+  past_projects?: any[];
   created_at?: string;
   last_scraped?: string;
 };
