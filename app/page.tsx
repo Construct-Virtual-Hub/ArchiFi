@@ -1022,7 +1022,7 @@ export default function ArchiFiUIFresh() {
           <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 px-3 py-2">
             <span className="text-xs text-neutral-500">Value(m)</span>
             <Input id="valueMin" name="valueMin" type="number" min={0} max={5} step="0.1" value={valueMin} onChange={(e) => setValueMin(Number(e.target.value))} className="h-8 w-20" />
-            <span className="text-neutral-400">â€"</span>
+            <span className="text-neutral-400 select-none" aria-hidden="true">{'\u2013'}</span>
             <Input id="valueMax" name="valueMax" type="number" min={0} max={5} step="0.1" value={valueMax} onChange={(e) => setValueMax(Number(e.target.value))} className="h-8 w-20" />
           </div>
         </div>
@@ -1135,7 +1135,7 @@ export default function ArchiFiUIFresh() {
                 ))}
                 {visibleItems.length === 0 && (
                   <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-                    Hit <span className="mx-1 rounded-md bg-neutral-900 px-2 py-0.5 text-white">Search</span> to load mock results.
+                    Hit <span className="mx-1 rounded-md bg-neutral-900 px-2 py-0.5 text-white">Search</span> to load architects.
                   </div>
                 )}
               </div>
