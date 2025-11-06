@@ -1,1 +1,1 @@
-{"version":1,"functions":{"/api/health":{},"/api/architect-details":{},"/api/scrape-status":{},"/api/search":{},"/api/scrape":{}}}
+{"version":1,"functions":{"/api/scrape-status":{},"/api/architect-details":{},"/api/scrape":{},"/api/search":{},"/api/health":{}}}

@@ -356,24 +356,28 @@ const SCRAPE_ENDPOINT = "/api/scrape";
 const SCRAPE_STATUS_ENDPOINT = "/api/scrape-status";
 const DETAILS_ENDPOINT = "/api/architect-details"; // optional; will no-op if 501
 
-// Terminal states that end polling for a card (used for non-regression)
-const TERMINAL_STATUSES = new Set(["success","failed","fail","complete","completed"]);
+// --- Scrape status helpers (place near other helpers) ---
+type RawScrapeStatus = "inprogress" | "success" | "failed" | string;
 
-function normStatus(s?: string) {
-  return (s || "").toLowerCase().trim();
+const STATUS_RANK: Record<string, number> = {
+  inprogress: 0,
+  success: 1,
+  failed: 1, // terminal like success; we treat both as rank 1
+};
+
+const TERMINAL: Set<string> = new Set(["success", "failed"]);
+
+function normStatus(s: RawScrapeStatus): "inprogress" | "success" | "failed" {
+  const v = String(s || "").toLowerCase().trim();
+  if (v === "success") return "success";
+  if (v === "failed" || v === "fail" || v === "error") return "failed";
+  return "inprogress";
 }
 
-// Pick the latest status row per architect_id by created_at
-function latestStatusPerArchitect(rows: any[]) {
-  const map: Record<string, any> = {};
-  for (const r of rows || []) {
-    const id = String(r.architect_id ?? "");
-    const ts = new Date(r.created_at || 0).getTime();
-    if (!map[id] || ts > new Date(map[id]?.created_at || 0).getTime()) {
-      map[id] = r;
-    }
-  }
-  return map;
+function keepHighestStatus(prev: RawScrapeStatus | undefined, next: RawScrapeStatus | undefined) {
+  const a = normStatus(prev ?? "inprogress");
+  const b = normStatus(next ?? "inprogress");
+  return STATUS_RANK[b] >= STATUS_RANK[a] ? b : a;
 }
 
 // Safe JSON parsing helper (handles incomplete ngrok responses)
@@ -525,9 +529,6 @@ export default function ArchiFiUIFresh() {
   const [scrapeSessionId, setScrapeSessionId] = useState<string | null>(null);
   const [scrapeTicker, setScrapeTicker] = useState<number>(0); // used to re-trigger polling (legacy, may be removed)
 
-  // Polling refs
-  const pollTimerRef = React.useRef<NodeJS.Timeout | null>(null);
-  const lastSessionRef = React.useRef<string | null>(null);
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -800,93 +801,152 @@ export default function ArchiFiUIFresh() {
     }
   }
 
+  // Hydrate a single architect's details from the scrape endpoint (or our existing fallback)
+  async function hydrateFromScrape(archId: string, sessionId: string) {
+    try {
+      // Try to fetch from details endpoint first
+      let details: any = null;
+      const detailsRes = await fetchScrapedDetails(archId);
+      if (detailsRes) {
+        // Convert the partial details to a format mapScrapeToPatch can use
+        details = detailsRes;
+      } else {
+        // Fallback: try to get from status endpoint (might include full details)
+        try {
+          const statusRes = await fetch(`${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+          if (statusRes.ok) {
+            const statusData = await safeJson<any[]>(statusRes);
+            if (Array.isArray(statusData)) {
+              // Find the event for this architect that has details
+              const event = statusData.find((e: any) => 
+                String(e.architect_id ?? e.id ?? "") === String(archId) &&
+                (e.email !== undefined || e.website !== undefined || e.company_bio !== undefined)
+              );
+              if (event) details = event;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // If still no details, try mock fallback
+      if (!details) {
+        const mock = MOCK_ENRICHED_BY_ID[String(archId)];
+        if (mock) details = mock;
+      }
+
+      if (!details) return;
+
+      const patch = mapScrapeToPatch(details);
+      if (!patch) return;
+
+      // Merge into review list without changing selection/ordering
+      setReview((prev) =>
+        prev.map((card) =>
+          String(card.id) === String(archId)
+            ? { ...card, ...patch, scrape: { ...(card.scrape || {}), status: "success", sessionId } }
+            : card
+        )
+      );
+    } catch {
+      // silent: don't break UI if details fetch is unavailable; the success status will still stick
+    }
+  }
+
   const [outreachPlatform, setOutreachPlatform] = useState<Record<string, string>>({});
   const platforms = ["LinkedIn", "Email", "Instagram", "Facebook", "WhatsApp", "Call"];
 
-  // Polling functions (test phase: run forever every 10s)
+  // Polling functions
   async function pollScrapeStatusOnce(sessionId: string) {
-    try {
-      const res = await fetch(`${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
-      if (!res.ok) {
-        console.warn("status poll failed:", res.status);
-        return; // do not change state on fetch error
+    // Call the ngrok status endpoint you wired earlier
+    // Expect: Array<{ id, created_at, session, architect_id, status, architect_name }>
+    const res = await fetch(
+      `${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(sessionId)}`,
+      { method: "GET", cache: "no-store" }
+    );
+    if (!res.ok) throw new Error(`status fetch failed: ${res.status}`);
+    const list = await safeJson<Array<any>>(res);
+    if (!Array.isArray(list)) return [];
+
+    // Reduce to latest status per architect_id using created_at
+    const latest = new Map<string, any>();
+    for (const row of list || []) {
+      const id = String(row.architect_id ?? "");
+      if (!id) continue;
+      const curr = latest.get(id);
+      if (!curr || new Date(row.created_at) > new Date(curr.created_at)) {
+        latest.set(id, row);
       }
-
-      const data = await safeJson<any[]>(res);
-      if (!Array.isArray(data) || data.length === 0) {
-        // No events this tick — keep polling
-        return;
-      }
-
-      // We only care about events for this session
-      const events = data.filter(e => e?.session === sessionId);
-
-      if (events.length === 0) return;
-
-      // Apply "newer wins" using created_at
-      setReview(prev => {
-        const byId = new Map(prev.map(c => [String(c.id), c]));
-        for (const e of events) {
-          const archId = String(e.architect_id ?? e.id ?? "");
-          const card = byId.get(archId);
-          if (!card) continue;
-
-          const s = normStatus(e.status); // expect "inprogress" | "success" | "failed"
-          if (!s) continue;
-
-          const eventTs = new Date(e.created_at ?? Date.now()).getTime();
-          const prevTs = card.scrape?.statusUpdatedAt ?? 0;
-
-          // Only update if this event is newer than what we have
-          if (eventTs > prevTs) {
-            const updatedCard = {
-              ...card,
-              scrape: {
-                ...(card.scrape ?? {}),
-                sessionId,
-                status: s,
-                statusUpdatedAt: eventTs,
-              },
-            };
-
-            // Hydrate details from event if available
-            const patch = mapScrapeToPatch(e);
-            if (patch) {
-              Object.assign(updatedCard, patch);
-            }
-
-            byId.set(archId, updatedCard);
-          }
-        }
-        return Array.from(byId.values());
-      });
-    } catch (err) {
-      console.warn("status poll error", err);
-      // swallow; keep polling
     }
+
+    return Array.from(latest.values()).map((r) => ({
+      architectId: String(r.architect_id),
+      status: normStatus(r.status),
+      sessionId: String(r.session || sessionId),
+    }));
   }
 
+  // Keep a single interval per active session
+  const scrapeIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+
   function stopScrapePolling() {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
+    if (scrapeIntervalRef.current !== null) {
+      clearInterval(scrapeIntervalRef.current);
+      scrapeIntervalRef.current = null;
     }
-    lastSessionRef.current = null;
   }
 
   function startScrapePolling(sessionId: string) {
-    if (pollTimerRef.current) return; // don't double-start
-    lastSessionRef.current = sessionId;
+    // Always reset interval (test phase: poll continuously)
+    stopScrapePolling();
 
-    // kick once immediately
-    void pollScrapeStatusOnce(sessionId);
+    const tick = async () => {
+      try {
+        const updates = await pollScrapeStatusOnce(sessionId);
 
-    // then ping every 10s indefinitely (test phase)
-    pollTimerRef.current = setInterval(() => {
-      // ensure we're still on the same session
-      if (lastSessionRef.current !== sessionId) return;
-      void pollScrapeStatusOnce(sessionId);
-    }, 10_000) as unknown as NodeJS.Timeout;
+        // Merge the statuses into review cards without regression
+        setReview((prev) => {
+          let allTerminal = true;
+
+          const next = prev.map((card) => {
+            const hit = updates.find((u) => String(u.architectId) === String(card.id));
+            const prevStatus = (card.scrape?.status ?? "inprogress") as RawScrapeStatus;
+            const nextStatus = hit ? keepHighestStatus(prevStatus, hit.status) : prevStatus;
+
+            if (!TERMINAL.has(nextStatus)) allTerminal = false;
+
+            // On first transition to terminal success, hydrate details
+            const wasTerminal = TERMINAL.has(prevStatus);
+            if (nextStatus === "success" && !wasTerminal) {
+              const sid = hit?.sessionId || card.scrape?.sessionId || sessionId;
+              // fire and forget; state will be merged in hydrateFromScrape
+              void hydrateFromScrape(String(card.id), String(sid));
+            }
+
+            // Preserve existing scrape object, only update status/sessionId when we have new info
+            const nextScrape = {
+              ...(card.scrape || {}),
+              status: nextStatus,
+              sessionId: hit?.sessionId || card.scrape?.sessionId || sessionId,
+            };
+
+            return { ...card, scrape: nextScrape };
+          });
+
+          // In test phase we keep polling, but if you want to stop when all terminal, uncomment:
+          // if (allTerminal) stopScrapePolling();
+
+          return next;
+        });
+      } catch {
+        // silent; interval will try again in 10s
+      }
+    };
+
+    // immediate tick + every 10s
+    tick();
+    scrapeIntervalRef.current = setInterval(tick, 10_000) as unknown as NodeJS.Timeout;
   }
 
   // Start polling when sessionId is set
