@@ -4,7 +4,11 @@ import React, { useMemo, useState, useEffect } from "react";
 import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon } from "lucide-react";
 import { motion } from "framer-motion";
 
-// â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”â€”
+// --- DEMO FLAG ---
+// Toggle to true for demo-only UI changes (hide job filter, placeholder library).
+const DEMO_MODE = true;
+
+// â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"â€"
 // ArchiFi â€“ Fresh Build (fixed)
 // Premium Tailwind + shadcn-like primitives (implemented inline for portability)
 // No horizontal overflow. Side library fixed. Three tabs: Discover • Review • Outreach
@@ -1011,8 +1015,10 @@ export default function ArchiFiUIFresh() {
           <div className="text-sm font-semibold tracking-wide text-neutral-400">ARCHIFI</div>
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <Input id="q" name="q" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Town or Postcode" className="min-w-0 max-w-[420px]" />
-          <Select id="jobType" name="jobType" value={jobType} onChange={setJobType} options={["All Job Types", "New Build", "Renovation", "Extension", "Interior Fit-Out"]} className="w-56" />
+          <Input id="q" name="q" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Town or Postcode" className="min-w-0 flex-1" />
+          {!DEMO_MODE && (
+            <Select id="jobType" name="jobType" value={jobType} onChange={setJobType} options={["All Job Types", "New Build", "Renovation", "Extension", "Interior Fit-Out"]} className="w-56" />
+          )}
           <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 px-3 py-2">
             <span className="text-xs text-neutral-500">Value(m)</span>
             <Input id="valueMin" name="valueMin" type="number" min={0} max={5} step="0.1" value={valueMin} onChange={(e) => setValueMin(Number(e.target.value))} className="h-8 w-20" />
@@ -1035,19 +1041,37 @@ export default function ArchiFiUIFresh() {
         <Card className="col-span-12 h-[72vh] overflow-hidden p-0 sm:col-span-3">
           <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/90 px-4 py-3 font-medium text-neutral-700">Architect Library</div>
           <div className="min-w-0 h-[calc(72vh-48px)] space-y-2 overflow-y-auto p-3 overscroll-contain">
-            {library.map((a) => (
-              <div key={a.id} className="min-w-0 rounded-xl border border-neutral-200 p-3 hover:border-neutral-300">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="truncate font-medium text-neutral-800">{a.name}</div>
-                  <span className="rounded-md bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">Grade {a.grade}</span>
-                </div>
-                <div className="mt-1 text-xs text-neutral-500 truncate">{a.city} • {a.postcode}</div>
-                <div className="mt-2 flex items-center justify-between">
-                  <span className="text-xs text-neutral-500">{a.company}</span>
-                  <Btn variant="ghost" className="h-8 px-3 text-xs">Add to Review</Btn>
-                </div>
+            {DEMO_MODE ? (
+              <div className="space-y-3">
+                {["Coming soon", "Coming soon", "Coming soon"].map((label, i) => (
+                  <div
+                    key={`soon-${i}`}
+                    className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-neutral-800">{label}</div>
+                    </div>
+                    <div className="mt-1 text-sm text-neutral-500">
+                      This panel will load your full scraped architect library.
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            ) : (
+              library.map((a) => (
+                <div key={a.id} className="min-w-0 rounded-xl border border-neutral-200 p-3 hover:border-neutral-300">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate font-medium text-neutral-800">{a.name}</div>
+                    <span className="rounded-md bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">Grade {a.grade}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-neutral-500 truncate">{a.city} • {a.postcode}</div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="text-xs text-neutral-500">{a.company}</span>
+                    <Btn variant="ghost" className="h-8 px-3 text-xs">Add to Review</Btn>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </Card>
 
