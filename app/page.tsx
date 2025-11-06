@@ -356,6 +356,44 @@ const SCRAPE_ENDPOINT = "/api/scrape";
 const SCRAPE_STATUS_ENDPOINT = "/api/scrape-status";
 const DETAILS_ENDPOINT = "/api/architect-details"; // optional; will no-op if 501
 
+// Fetch latest scraped details for a set of architects.
+// We reuse the same POST scrape endpoint: backend accepts an array of architect objects or IDs.
+// Here we send only { id } per spec; backend will return enriched objects when available.
+async function fetchScrapedDetailsByIds(ids: string[]): Promise<any[]> {
+  if (!ids?.length) return [];
+  try {
+    const res = await fetch(SCRAPE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // Send minimal bodies with ids; backend returns detail objects when present.
+      body: JSON.stringify(ids.map(id => ({ id: Number(id) }))),
+    });
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => null);
+    // Return as array (normalize single object to array)
+    if (!data) return [];
+    return Array.isArray(data) ? data : [data];
+  } catch {
+    return [];
+  }
+}
+
+function deepMergeArchitect<T extends Record<string, any>>(base: T, patch: Partial<T>): T {
+  // Only assign keys that are not undefined/null/empty string in the patch.
+  // Shallow-merge nested objects like `scrape`/`contact` if present.
+  const out: any = { ...base };
+
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined || v === null || v === "") continue;
+    if (typeof v === "object" && !Array.isArray(v)) {
+      out[k] = deepMergeArchitect(out[k] ?? {}, v as any);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out as T;
+}
+
 // --- Scrape status helpers (place near other helpers) ---
 type RawScrapeStatus = "inprogress" | "success" | "failed" | string;
 
@@ -529,6 +567,9 @@ export default function ArchiFiUIFresh() {
   const [scrapeSessionId, setScrapeSessionId] = useState<string | null>(null);
   const [scrapeTicker, setScrapeTicker] = useState<number>(0); // used to re-trigger polling (legacy, may be removed)
 
+  // Ref for reading latest review state inside polling intervals
+  const reviewRef = React.useRef(review);
+  useEffect(() => { reviewRef.current = review; }, [review]);
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -880,15 +921,12 @@ export default function ArchiFiUIFresh() {
       }
     }
 
-    return Array.from(latest.values()).map((r) => ({
-      architectId: String(r.architect_id),
-      status: normStatus(r.status),
-      sessionId: String(r.session || sessionId),
-    }));
+    return Array.from(latest.values());
   }
 
   // Keep a single interval per active session
   const scrapeIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  const startedAtRef = React.useRef<number>(0);
 
   function stopScrapePolling() {
     if (scrapeIntervalRef.current !== null) {
@@ -900,45 +938,95 @@ export default function ArchiFiUIFresh() {
   function startScrapePolling(sessionId: string) {
     // Always reset interval (test phase: poll continuously)
     stopScrapePolling();
+    startedAtRef.current = Date.now();
 
     const tick = async () => {
       try {
-        const updates = await pollScrapeStatusOnce(sessionId);
+        const latestStatuses = await pollScrapeStatusOnce(sessionId);
+        if (!latestStatuses.length) return;
 
-        // Merge the statuses into review cards without regression
-        setReview((prev) => {
-          let allTerminal = true;
+        // Collect ids that newly reached a terminal 'success' (and weren't already success)
+        const newlySuccessfulIds: string[] = [];
+        const pendingUpdates: Array<{ id: string; patch: Partial<Architect> }> = [];
 
-          const next = prev.map((card) => {
-            const hit = updates.find((u) => String(u.architectId) === String(card.id));
-            const prevStatus = (card.scrape?.status ?? "inprogress") as RawScrapeStatus;
-            const nextStatus = hit ? keepHighestStatus(prevStatus, hit.status) : prevStatus;
+        for (const row of latestStatuses) {
+          const id = String(row.architect_id);
+          const next = normStatus(row.status);
 
-            if (!TERMINAL.has(nextStatus)) allTerminal = false;
+          // find index in review list
+          const idx = reviewRef.current.findIndex(a => String(a.id) === id);
+          if (idx === -1) continue;
 
-            // On first transition to terminal success, hydrate details
-            const wasTerminal = TERMINAL.has(prevStatus);
-            if (nextStatus === "success" && !wasTerminal) {
-              const sid = hit?.sessionId || card.scrape?.sessionId || sessionId;
-              // fire and forget; state will be merged in hydrateFromScrape
-              void hydrateFromScrape(String(card.id), String(sid));
+          const prev = reviewRef.current[idx]?.scrape?.status ?? "inprogress";
+
+          // non-regression + only mark when improved
+          const isTerminalBefore = prev === "success" || prev === "failed";
+          if (!isTerminalBefore) {
+            // update status in state (your existing setReview call)
+            pendingUpdates.push({
+              id,
+              patch: { scrape: { ...(reviewRef.current[idx].scrape ?? {}), status: next, sessionId } },
+            });
+          }
+
+          if (next === "success" && prev !== "success") {
+            newlySuccessfulIds.push(id);
+          }
+        }
+
+        // Apply pending status updates
+        if (pendingUpdates.length) {
+          setReview((curr) => {
+            const byId = new Map(curr.map(c => [String(c.id), c]));
+            for (const { id, patch } of pendingUpdates) {
+              const card = byId.get(id);
+              if (card) {
+                byId.set(id, deepMergeArchitect(card, patch));
+              }
             }
-
-            // Preserve existing scrape object, only update status/sessionId when we have new info
-            const nextScrape = {
-              ...(card.scrape || {}),
-              status: nextStatus,
-              sessionId: hit?.sessionId || card.scrape?.sessionId || sessionId,
-            };
-
-            return { ...card, scrape: nextScrape };
+            return Array.from(byId.values());
           });
+        }
 
-          // In test phase we keep polling, but if you want to stop when all terminal, uncomment:
-          // if (allTerminal) stopScrapePolling();
+        // Fetch and merge details for newly successful cards
+        if (newlySuccessfulIds.length) {
+          // Fetch fresh details only for the successful ones
+          fetchScrapedDetailsByIds(newlySuccessfulIds)
+            .then((details) => {
+              if (!details?.length) return;
+              // Convert backend records to Partial<Architect> using your mapper.
+              const patches = details
+                .map(d => mapScrapeToPatch(d))  // you already have this
+                .filter(Boolean);
 
-          return next;
-        });
+              if (!patches.length) return;
+
+              // Merge patches into the review list
+              setReview(curr => {
+                const byId = new Map(curr.map(c => [String(c.id), c]));
+                for (const patch of patches) {
+                  const id = String(patch.id ?? "");
+                  if (!id) continue;
+                  const card = byId.get(id);
+                  if (card) {
+                    byId.set(id, deepMergeArchitect(card, patch));
+                  }
+                }
+                return Array.from(byId.values());
+              });
+            })
+            .catch(() => {/* noop; keep status shown */});
+        }
+
+        // Check if all cards in this session are terminal
+        const allTerminal = reviewRef.current
+          .filter(a => a.scrape?.sessionId === sessionId) // same session
+          .every(a => a.scrape?.status === "success" || a.scrape?.status === "failed");
+
+        if (allTerminal || Date.now() - startedAtRef.current > 5 * 60 * 1000) {
+          // In test phase, we keep polling, but this is here for when we want to stop
+          // stopScrapePolling();
+        }
       } catch {
         // silent; interval will try again in 10s
       }
