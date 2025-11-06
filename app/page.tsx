@@ -356,6 +356,26 @@ const SCRAPE_ENDPOINT = "/api/scrape";
 const SCRAPE_STATUS_ENDPOINT = "/api/scrape-status";
 const DETAILS_ENDPOINT = "/api/architect-details"; // optional; will no-op if 501
 
+// Terminal states that end polling for a card (used for non-regression)
+const TERMINAL_STATUSES = new Set(["success","failed","fail","complete","completed"]);
+
+function normStatus(s?: string) {
+  return (s || "").toLowerCase().trim();
+}
+
+// Pick the latest status row per architect_id by created_at
+function latestStatusPerArchitect(rows: any[]) {
+  const map: Record<string, any> = {};
+  for (const r of rows || []) {
+    const id = String(r.architect_id ?? "");
+    const ts = new Date(r.created_at || 0).getTime();
+    if (!map[id] || ts > new Date(map[id]?.created_at || 0).getTime()) {
+      map[id] = r;
+    }
+  }
+  return map;
+}
+
 type ApiItem = any; // defensive: map fields below
 type ApiResponse = { items?: ApiItem[]; nextId?: number | null; hasMore?: boolean };
 
@@ -491,7 +511,11 @@ export default function ArchiFiUIFresh() {
   const [outreach, setOutreach] = useState<Architect[]>([]);
 
   const [scrapeSessionId, setScrapeSessionId] = useState<string | null>(null);
-  const [scrapeTicker, setScrapeTicker] = useState<number>(0); // used to re-trigger polling
+  const [scrapeTicker, setScrapeTicker] = useState<number>(0); // used to re-trigger polling (legacy, may be removed)
+
+  // Polling refs
+  const pollTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const lastSessionRef = React.useRef<string | null>(null);
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -767,60 +791,47 @@ export default function ArchiFiUIFresh() {
   const [outreachPlatform, setOutreachPlatform] = useState<Record<string, string>>({});
   const platforms = ["LinkedIn", "Email", "Instagram", "Facebook", "WhatsApp", "Call"];
 
-  // Polling effect (every ~10s while any inprogress exists)
-  useEffect(() => {
-    const active = review.some(r => (r.scrape?.status || "").toLowerCase().includes("progress"));
-    if (!scrapeSessionId || !active) return;
-
-    const timeoutMs = 5 * 60 * 1000;
-
-    const tick = async () => {
-      let arr: any[] = [];
-      try {
-        const res = await fetch(`${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(scrapeSessionId)}`, { cache: "no-store" });
-        if (!res.ok) { console.warn("status poll failed:", res.status); return; }
-        arr = await res.json();
-        if (!Array.isArray(arr)) return;
-      } catch (e) {
-        console.warn("status poll error", e);
+  // Polling functions (test phase: run forever every 10s)
+  async function pollScrapeStatusOnce(sessionId: string) {
+    try {
+      const res = await fetch(`${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+      if (!res.ok) {
+        console.warn("status poll failed:", res.status);
         return;
       }
+      const arr = await res.json();
+      if (!Array.isArray(arr)) return;
 
-      // We'll use two passes:
-      // 1) Update statuses (use raw upstream text)
-      // 2) Hydrate details for rows that include enrichment fields (your example object)
+      // Use latest status per architect by created_at
+      const latest = latestStatusPerArchitect(arr);
 
-      // Pass 1 – status update
-      const byIdStatus: Record<string, string> = {};
-      for (const s of arr) {
-        const id = String(s.architect_id ?? s.id ?? "");
-        const raw = String(s.status ?? "").trim(); // e.g. "success" | "inprogress" | "failed" | "complete"
-        if (id) byIdStatus[id] = raw;
-      }
-
-      const finishedIds: string[] = [];
+      // Update statuses with non-regression protection
       setReview(cur => cur.map(r => {
-        const current = (r.scrape?.status ?? "idle").toLowerCase();
-        let nextRaw = byIdStatus[r.id] ?? byIdStatus[String(r.id)] ?? current;
+        if (r.scrape?.sessionId !== sessionId) return r;
 
-        // timeout protection
-        const started = r.scrape?.startedAt ?? 0;
-        const inProgress = (nextRaw.toLowerCase() === "inprogress");
-        const overdue = inProgress && started && (Date.now() - started >= timeoutMs);
-        if (overdue) nextRaw = "failed";
+        const key = String(r.raw?.id ?? r.id);
+        const row = latest[key];
+        if (!row) return r;
 
-        const finished = ["success", "complete"].includes(nextRaw.toLowerCase());
-        if (finished && current === "inprogress") finishedIds.push(r.id);
+        const next = normStatus(row.status);
+        const prevS = normStatus(r.scrape?.status);
 
-        if (nextRaw === r.scrape?.status && !overdue) return r;
-        return { ...r, scrape: { ...r.scrape, sessionId: scrapeSessionId, status: nextRaw } };
+        // Never regress terminal → non-terminal
+        if (TERMINAL_STATUSES.has(prevS)) return r;
+
+        // Hydrate details from latest if available
+        const patch = mapScrapeToPatch(row);
+
+        return {
+          ...r,
+          ...(patch || {}),
+          scrape: { ...(r.scrape || {}), sessionId, status: next, lastUpdateAt: Date.now() }
+        };
       }));
 
-      // Pass 2 – hydration from the status payload when it contains details
-      // Your backend sometimes returns full enriched objects in the poll (example you sent).
+      // Hydrate details for any rows that have enrichment fields
       const byIdDetails: Record<string, any> = {};
       for (const s of arr) {
-        // Heuristic: treat rows with any of these fields as "detailed"
         const looksDetailed =
           s.email !== undefined || s.website !== undefined ||
           s.company_bio !== undefined || s.address !== undefined ||
@@ -833,37 +844,54 @@ export default function ArchiFiUIFresh() {
 
       if (Object.keys(byIdDetails).length) {
         setReview(cur => cur.map(r => {
+          if (r.scrape?.sessionId !== sessionId) return r;
           const d = byIdDetails[r.id] ?? byIdDetails[String(r.id)];
           if (!d) return r;
 
-          const patch = patchFromScrape(d);
+          const patch = mapScrapeToPatch(d);
           return patch ? { ...r, ...patch } : r;
         }));
       }
+    } catch (e) {
+      console.warn("status poll error", e);
+    }
+  }
 
-      // Fallback: if a card just finished and we STILL have no details payload,
-      // hydrate from raw (what we sent to the scraper) so the panel isn't empty.
-      if (finishedIds.length) {
-        setReview(cur => cur.map(r => {
-          if (!finishedIds.includes(r.id)) return r;
+  function stopScrapePolling() {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    lastSessionRef.current = null;
+  }
 
-          // if already hydrated above, leave as is
-          if (r.email || r.phone || r.website || r.socials) return r;
+  function startScrapePolling(sessionId: string) {
+    if (pollTimerRef.current) return; // don't double-start
+    lastSessionRef.current = sessionId;
 
-          const x = r.raw || {};
-          const patch = patchFromScrape(x);
-          return patch ? { ...r, ...patch } : r;
-        }));
-      }
+    // kick once immediately
+    void pollScrapeStatusOnce(sessionId);
+
+    // then ping every 10s indefinitely (test phase)
+    pollTimerRef.current = setInterval(() => {
+      // ensure we're still on the same session
+      if (lastSessionRef.current !== sessionId) return;
+      void pollScrapeStatusOnce(sessionId);
+    }, 10_000) as unknown as NodeJS.Timeout;
+  }
+
+  // Start polling when sessionId is set
+  useEffect(() => {
+    if (scrapeSessionId) {
+      startScrapePolling(scrapeSessionId);
+    }
+    return () => {
+      stopScrapePolling();
     };
-
-    // run now & then every 10s
-    tick();
-    const id = setInterval(tick, 10000);
-    return () => clearInterval(id);
-  }, [scrapeSessionId, review.length, scrapeTicker]);
+  }, [scrapeSessionId]);
 
   function clearReview() {
+    stopScrapePolling();
     setReview([]);
     setReviewSelected({});
     setDetailsId(null);
