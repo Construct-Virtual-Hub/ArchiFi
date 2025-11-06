@@ -356,26 +356,20 @@ const SCRAPE_ENDPOINT = "/api/scrape";
 const SCRAPE_STATUS_ENDPOINT = "/api/scrape-status";
 const DETAILS_ENDPOINT = "/api/architect-details"; // optional; will no-op if 501
 
-// Fetch latest scraped details for a set of architects.
-// We reuse the same POST scrape endpoint: backend accepts an array of architect objects or IDs.
-// Here we send only { id } per spec; backend will return enriched objects when available.
+// Fetch latest scraped details for specific architect ids.
+// We re-use the scrape POST endpoint by sending only {id} entries.
+// Backend responds with enriched records for completed ones.
 async function fetchScrapedDetailsByIds(ids: string[]): Promise<any[]> {
   if (!ids?.length) return [];
-  try {
-    const res = await fetch(SCRAPE_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // Send minimal bodies with ids; backend returns detail objects when present.
-      body: JSON.stringify(ids.map(id => ({ id: Number(id) }))),
-    });
-    if (!res.ok) return [];
-    const data = await res.json().catch(() => null);
-    // Return as array (normalize single object to array)
-    if (!data) return [];
-    return Array.isArray(data) ? data : [data];
-  } catch {
-    return [];
-  }
+  const res = await fetch(SCRAPE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(ids.map(id => ({ id: Number(id) }))),
+  });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => null);
+  if (!data) return [];
+  return Array.isArray(data) ? data : [data];
 }
 
 function deepMergeArchitect<T extends Record<string, any>>(base: T, patch: Partial<T>): T {
@@ -395,27 +389,11 @@ function deepMergeArchitect<T extends Record<string, any>>(base: T, patch: Parti
 }
 
 // --- Scrape status helpers (place near other helpers) ---
-type RawScrapeStatus = "inprogress" | "success" | "failed" | string;
+// Terminal statuses we accept from the status endpoint
+const TERMINAL_STATUSES = new Set(["success", "failed"]);
 
-const STATUS_RANK: Record<string, number> = {
-  inprogress: 0,
-  success: 1,
-  failed: 1, // terminal like success; we treat both as rank 1
-};
-
-const TERMINAL: Set<string> = new Set(["success", "failed"]);
-
-function normStatus(s: RawScrapeStatus): "inprogress" | "success" | "failed" {
-  const v = String(s || "").toLowerCase().trim();
-  if (v === "success") return "success";
-  if (v === "failed" || v === "fail" || v === "error") return "failed";
-  return "inprogress";
-}
-
-function keepHighestStatus(prev: RawScrapeStatus | undefined, next: RawScrapeStatus | undefined) {
-  const a = normStatus(prev ?? "inprogress");
-  const b = normStatus(next ?? "inprogress");
-  return STATUS_RANK[b] >= STATUS_RANK[a] ? b : a;
+function normStatus(s?: string) {
+  return (s || "").trim().toLowerCase();
 }
 
 // Safe JSON parsing helper (handles incomplete ngrok responses)
@@ -570,6 +548,9 @@ export default function ArchiFiUIFresh() {
   // Ref for reading latest review state inside polling intervals
   const reviewRef = React.useRef(review);
   useEffect(() => { reviewRef.current = review; }, [review]);
+
+  // Ref for selected IDs in scrape POST handler
+  const selectedIdsRef = React.useRef<Set<string>>(new Set());
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -727,6 +708,7 @@ export default function ArchiFiUIFresh() {
     if (!picked.length) return;
 
     const clientSession = `session-scrape-${Date.now()}`;
+    selectedIdsRef.current = new Set(picked.map(p => String(p.id)));
 
     // Build payload we POST to the scraper
     const payload = picked.map(p =>
@@ -748,7 +730,7 @@ export default function ArchiFiUIFresh() {
       const merged = [...cur];
       for (const p of picked) {
         const rawOfThis = payload.find((x: any) => String(x.id) === String(p.id)) ?? p.raw ?? null;
-        const mark = { ...p, raw: rawOfThis, scrape: { sessionId: clientSession, status: "inprogress", startedAt: Date.now(), statusUpdatedAt: Date.now() } };
+        const mark = { ...p, raw: rawOfThis, scrape: { sessionId: clientSession, status: "inprogress", startedAt: Date.now() } };
         if (!ids.has(p.id)) merged.push(mark);
         else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = mark; });
       }
@@ -760,61 +742,49 @@ export default function ArchiFiUIFresh() {
       const resp = await postJSON(SCRAPE_ENDPOINT, payload);
 
       let serverSession: string | null = null;
-      let immediateDetails: any[] | null = null;
 
       try {
         const data = await resp.clone().json();
-        if (Array.isArray(data)) {
-          immediateDetails = data;
-        } else if (data && typeof data === "object") {
+        if (data && typeof data === "object") {
           serverSession = (data.session || data.session_id || data.id) ?? null;
-          if (Array.isArray((data as any).items))   immediateDetails = (data as any).items;
-          if (Array.isArray((data as any).data))    immediateDetails = (data as any).data;
-          if (Array.isArray((data as any).results)) immediateDetails = (data as any).results;
         }
       } catch { /* ignore non-JSON */ }
 
-      const effectiveSession = (serverSession || clientSession).toString();
-      setScrapeSessionId(effectiveSession);
+      const sessionId = (serverSession || clientSession).toString();
+      setScrapeSessionId(sessionId);
 
-      if (immediateDetails && immediateDetails.length) {
-        const byId: Record<string, any> = {};
-        for (const d of immediateDetails) {
-          const key = String(d.id ?? d.architect_id ?? "");
-          if (key) byId[key] = d;
-        }
-
-        setReview(cur => cur.map(r => {
-          const d = byId[String(r.id)];
-          if (!d) return r;
-
-          const patch = mapScrapeToPatch(d);
-          return patch ? { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession, statusUpdatedAt: Date.now() } } : r;
-        }));
-      } else {
-        // Backend online but returned only session OR backend offline scenario:
-        setReview(cur => cur.map(r => {
-          const mock = MOCK_ENRICHED_BY_ID[String(r.id)];
-          const patch = mapScrapeToPatch(mock ?? r.raw);
-
-          if (!patch) return r;
-
-          return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession, statusUpdatedAt: Date.now() } };
-        }));
-      }
-
-      setTimeout(() => setScrapeTicker(t => t + 1), 800);
-    } catch (e) {
-      console.warn("scrape POST failed; using mock enrichment", e);
-      // Immediate mock success + hydrate from enriched mock OR raw
-      setReview(cur => cur.map(r => {
-        const mock = MOCK_ENRICHED_BY_ID[String(r.id)];
-        const patch = mapScrapeToPatch(mock ?? r.raw);
-
-        if (!patch) return r;
-
-        return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: clientSession, statusUpdatedAt: Date.now() } };
+      // 1) mark selected cards as in progress + session (no details merge here)
+      setReview(curr => curr.map(a => {
+        if (!selectedIdsRef.current.has(String(a.id))) return a;
+        return deepMergeArchitect(a, {
+          scrape: {
+            ...(a.scrape ?? {}),
+            status: "inprogress",
+            sessionId, // prefer backend session id; fallback to client-generated if needed
+            startedAt: Date.now(),
+          },
+        });
       }));
+
+      // 2) begin polling every 10s for this session
+      startScrapePolling(sessionId);
+    } catch (e) {
+      console.warn("scrape POST failed", e);
+      // On error, still mark as inprogress and start polling
+      const sessionId = clientSession;
+      setScrapeSessionId(sessionId);
+      setReview(curr => curr.map(a => {
+        if (!selectedIdsRef.current.has(String(a.id))) return a;
+        return deepMergeArchitect(a, {
+          scrape: {
+            ...(a.scrape ?? {}),
+            status: "inprogress",
+            sessionId,
+            startedAt: Date.now(),
+          },
+        });
+      }));
+      startScrapePolling(sessionId);
     }
   }
 
@@ -945,87 +915,60 @@ export default function ArchiFiUIFresh() {
         const latestStatuses = await pollScrapeStatusOnce(sessionId);
         if (!latestStatuses.length) return;
 
-        // Collect ids that newly reached a terminal 'success' (and weren't already success)
         const newlySuccessfulIds: string[] = [];
-        const pendingUpdates: Array<{ id: string; patch: Partial<Architect> }> = [];
+        let anyPending = false;
 
         for (const row of latestStatuses) {
           const id = String(row.architect_id);
           const next = normStatus(row.status);
 
-          // find index in review list
           const idx = reviewRef.current.findIndex(a => String(a.id) === id);
           if (idx === -1) continue;
 
-          const prev = reviewRef.current[idx]?.scrape?.status ?? "inprogress";
+          const prev = normStatus(reviewRef.current[idx]?.scrape?.status);
+          const alreadyTerminal = TERMINAL_STATUSES.has(prev);
 
-          // non-regression + only mark when improved
-          const isTerminalBefore = prev === "success" || prev === "failed";
-          if (!isTerminalBefore) {
-            // update status in state (your existing setReview call)
-            pendingUpdates.push({
-              id,
-              patch: { scrape: { ...(reviewRef.current[idx].scrape ?? {}), status: next, sessionId } },
-            });
-          }
-
-          if (next === "success" && prev !== "success") {
-            newlySuccessfulIds.push(id);
-          }
-        }
-
-        // Apply pending status updates
-        if (pendingUpdates.length) {
-          setReview((curr) => {
-            const byId = new Map(curr.map(c => [String(c.id), c]));
-            for (const { id, patch } of pendingUpdates) {
-              const card = byId.get(id);
-              if (card) {
-                byId.set(id, deepMergeArchitect(card, patch));
-              }
-            }
-            return Array.from(byId.values());
-          });
-        }
-
-        // Fetch and merge details for newly successful cards
-        if (newlySuccessfulIds.length) {
-          // Fetch fresh details only for the successful ones
-          fetchScrapedDetailsByIds(newlySuccessfulIds)
-            .then((details) => {
-              if (!details?.length) return;
-              // Convert backend records to Partial<Architect> using your mapper.
-              const patches = details
-                .map(d => mapScrapeToPatch(d))  // you already have this
-                .filter(Boolean);
-
-              if (!patches.length) return;
-
-              // Merge patches into the review list
-              setReview(curr => {
-                const byId = new Map(curr.map(c => [String(c.id), c]));
-                for (const patch of patches) {
-                  const id = String(patch.id ?? "");
-                  if (!id) continue;
-                  const card = byId.get(id);
-                  if (card) {
-                    byId.set(id, deepMergeArchitect(card, patch));
-                  }
-                }
-                return Array.from(byId.values());
+          // Only let polled status drive transitions; never regress terminal -> inprogress
+          if (!alreadyTerminal) {
+            // write the polled status as-is (inprogress | success | failed)
+            anyPending = true;
+            setReview(curr => curr.map(a => {
+              if (String(a.id) !== id) return a;
+              return deepMergeArchitect(a, {
+                scrape: { ...(a.scrape ?? {}), status: next }
               });
-            })
-            .catch(() => {/* noop; keep status shown */});
+            }));
+
+            if (next === "success") newlySuccessfulIds.push(id);
+          }
         }
 
-        // Check if all cards in this session are terminal
-        const allTerminal = reviewRef.current
-          .filter(a => a.scrape?.sessionId === sessionId) // same session
-          .every(a => a.scrape?.status === "success" || a.scrape?.status === "failed");
+        // If some became success this tick, fetch their details now and hydrate panel/list
+        if (newlySuccessfulIds.length) {
+          fetchScrapedDetailsByIds(newlySuccessfulIds).then(details => {
+            if (!details?.length) return;
+            const patches = details.map(d => mapScrapeToPatch(d)).filter(Boolean);
 
-        if (allTerminal || Date.now() - startedAtRef.current > 5 * 60 * 1000) {
-          // In test phase, we keep polling, but this is here for when we want to stop
-          // stopScrapePolling();
+            // Merge into review list
+            setReview(curr => {
+              const byId = new Map(patches.map(p => [String(p.id), p]));
+              return curr.map(a => {
+                const p = byId.get(String(a.id));
+                return p ? deepMergeArchitect(a, p) : a;
+              });
+            });
+          }).catch(() => {});
+        }
+
+        // Stop only when every architect in this session is terminal OR after a global timeout
+        const allTerminal = reviewRef.current
+          .filter(a => a.scrape?.sessionId === sessionId)
+          .every(a => TERMINAL_STATUSES.has(normStatus(a.scrape?.status)));
+
+        if (allTerminal) {
+          clearInterval(scrapeIntervalRef.current!);
+          scrapeIntervalRef.current = null;
+          return;
         }
       } catch {
         // silent; interval will try again in 10s
@@ -1348,6 +1291,8 @@ const LabelRow: React.FC<{ icon?: React.ReactNode; label: string; value?: React.
 );
 
 function ArchiDetails({ a }: { a: Architect }) {
+  const polledSuccess = normStatus(a.scrape?.status) === "success";
+
   return (
     <div className="min-w-0 space-y-3">
       <div className="text-base font-semibold text-neutral-900">{a.name}</div>
@@ -1371,100 +1316,104 @@ function ArchiDetails({ a }: { a: Architect }) {
             <LabelRow icon={<Globe className="h-3.5 w-3.5" />} label="Website" value={a.website ? <a className="break-all underline" href={a.website} target="_blank" rel="noreferrer">{a.website}</a> : "-"} />
           </div>
         </Card>
-        <Card className="p-3 md:col-span-2">
-          <div className="text-sm font-medium text-neutral-700">Socials</div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {(a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url) && (
-              <a href={a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
-                <LinkIcon className="h-3.5 w-3.5" /> LinkedIn
-              </a>
-            )}
-            {(a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url) && (
-              <a href={a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
-                <LinkIcon className="h-3.5 w-3.5" /> Instagram
-              </a>
-            )}
-            {(a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url) && (
-              <a href={a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
-                <LinkIcon className="h-3.5 w-3.5" /> Facebook
-              </a>
-            )}
-          </div>
-        </Card>
-
-        {/* --- Company Bio (if present) --- */}
-        {(a.company_bio || a.bio) && (
-          <Card className="p-4">
-            <div className="text-sm font-medium text-neutral-700 mb-2">Company / Profile Bio</div>
-            <div className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
-              {a.company_bio || a.bio}
-            </div>
-          </Card>
-        )}
-
-        {/* --- Registration (if present) --- */}
-        {(a.registration_number || a.registration_link) && (
-          <Card className="p-4">
-            <div className="text-sm font-medium text-neutral-700 mb-2">Registration</div>
-            <div className="text-sm text-neutral-700 space-y-1">
-              {a.registration_number && (
-                <div><span className="text-neutral-500">Number:</span> {a.registration_number}</div>
-              )}
-              {a.registration_link && (
-                <div>
-                  <span className="text-neutral-500">Link:</span>{" "}
-                  <a href={a.registration_link} target="_blank" rel="noreferrer" className="underline break-all">{a.registration_link}</a>
-                </div>
-              )}
-            </div>
-          </Card>
-        )}
-
-        {/* --- Addresses (if present) --- */}
-        {(a.address || a.alternate_address || a.country || a.post_code || a.post_code_area) && (
-          <Card className="p-4">
-            <div className="text-sm font-medium text-neutral-700 mb-2">Addresses</div>
-            <div className="text-sm text-neutral-700 space-y-1">
-              {a.address && (<div><span className="text-neutral-500">Primary:</span> {a.address}</div>)}
-              {a.alternate_address && (<div><span className="text-neutral-500">Alternate:</span> {a.alternate_address}</div>)}
-              <div className="flex flex-wrap gap-x-6 gap-y-1">
-                {a.country && (<div><span className="text-neutral-500">Country:</span> {a.country}</div>)}
-                {a.post_code && (<div><span className="text-neutral-500">Postcode:</span> {a.post_code}</div>)}
-                {a.post_code_area && (<div><span className="text-neutral-500">Postcode Area:</span> {a.post_code_area}</div>)}
+        {polledSuccess && (
+          <>
+            <Card className="p-3 md:col-span-2">
+              <div className="text-sm font-medium text-neutral-700">Socials</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {(a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url) && (
+                  <a href={a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
+                    <LinkIcon className="h-3.5 w-3.5" /> LinkedIn
+                  </a>
+                )}
+                {(a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url) && (
+                  <a href={a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
+                    <LinkIcon className="h-3.5 w-3.5" /> Instagram
+                  </a>
+                )}
+                {(a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url) && (
+                  <a href={a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
+                    <LinkIcon className="h-3.5 w-3.5" /> Facebook
+                  </a>
+                )}
               </div>
-            </div>
-          </Card>
-        )}
+            </Card>
 
-        {/* --- Notes (if present) --- */}
-        {a.notes && (
-          <Card className="p-4">
-            <div className="text-sm font-medium text-neutral-700 mb-2">Notes</div>
-            <div className="text-sm text-neutral-700 whitespace-pre-wrap">{a.notes}</div>
-          </Card>
-        )}
+            {/* --- Company Bio (if present) --- */}
+            {(a.company_bio || a.bio) && (
+              <Card className="p-4">
+                <div className="text-sm font-medium text-neutral-700 mb-2">Company / Profile Bio</div>
+                <div className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
+                  {a.company_bio || a.bio}
+                </div>
+              </Card>
+            )}
 
-        {/* --- Past Projects (if present) --- */}
-        {Array.isArray(a.past_projects) && a.past_projects.length > 0 && (
-          <Card className="p-4">
-            <div className="text-sm font-medium text-neutral-700 mb-2">Past Projects</div>
-            <ul className="list-disc pl-5 text-sm text-neutral-700 space-y-1">
-              {a.past_projects.map((p, i) => (
-                <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>
-              ))}
-            </ul>
-          </Card>
-        )}
+            {/* --- Registration (if present) --- */}
+            {(a.registration_number || a.registration_link) && (
+              <Card className="p-4">
+                <div className="text-sm font-medium text-neutral-700 mb-2">Registration</div>
+                <div className="text-sm text-neutral-700 space-y-1">
+                  {a.registration_number && (
+                    <div><span className="text-neutral-500">Number:</span> {a.registration_number}</div>
+                  )}
+                  {a.registration_link && (
+                    <div>
+                      <span className="text-neutral-500">Link:</span>{" "}
+                      <a href={a.registration_link} target="_blank" rel="noreferrer" className="underline break-all">{a.registration_link}</a>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
 
-        {/* --- Metadata (if present) --- */}
-        {(a.created_at || a.last_scraped) && (
-          <Card className="p-4">
-            <div className="text-sm font-medium text-neutral-700 mb-2">Metadata</div>
-            <div className="text-sm text-neutral-700 space-y-1">
-              {a.created_at && (<div><span className="text-neutral-500">Created:</span> {new Date(a.created_at).toLocaleString()}</div>)}
-              {a.last_scraped && (<div><span className="text-neutral-500">Last Scraped:</span> {new Date(a.last_scraped).toLocaleString()}</div>)}
-            </div>
-          </Card>
+            {/* --- Addresses (if present) --- */}
+            {(a.address || a.alternate_address || a.country || a.post_code || a.post_code_area) && (
+              <Card className="p-4">
+                <div className="text-sm font-medium text-neutral-700 mb-2">Addresses</div>
+                <div className="text-sm text-neutral-700 space-y-1">
+                  {a.address && (<div><span className="text-neutral-500">Primary:</span> {a.address}</div>)}
+                  {a.alternate_address && (<div><span className="text-neutral-500">Alternate:</span> {a.alternate_address}</div>)}
+                  <div className="flex flex-wrap gap-x-6 gap-y-1">
+                    {a.country && (<div><span className="text-neutral-500">Country:</span> {a.country}</div>)}
+                    {a.post_code && (<div><span className="text-neutral-500">Postcode:</span> {a.post_code}</div>)}
+                    {a.post_code_area && (<div><span className="text-neutral-500">Postcode Area:</span> {a.post_code_area}</div>)}
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* --- Notes (if present) --- */}
+            {a.notes && (
+              <Card className="p-4">
+                <div className="text-sm font-medium text-neutral-700 mb-2">Notes</div>
+                <div className="text-sm text-neutral-700 whitespace-pre-wrap">{a.notes}</div>
+              </Card>
+            )}
+
+            {/* --- Past Projects (if present) --- */}
+            {Array.isArray(a.past_projects) && a.past_projects.length > 0 && (
+              <Card className="p-4">
+                <div className="text-sm font-medium text-neutral-700 mb-2">Past Projects</div>
+                <ul className="list-disc pl-5 text-sm text-neutral-700 space-y-1">
+                  {a.past_projects.map((p, i) => (
+                    <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>
+                  ))}
+                </ul>
+              </Card>
+            )}
+
+            {/* --- Metadata (if present) --- */}
+            {(a.created_at || a.last_scraped) && (
+              <Card className="p-4">
+                <div className="text-sm font-medium text-neutral-700 mb-2">Metadata</div>
+                <div className="text-sm text-neutral-700 space-y-1">
+                  {a.created_at && (<div><span className="text-neutral-500">Created:</span> {new Date(a.created_at).toLocaleString()}</div>)}
+                  {a.last_scraped && (<div><span className="text-neutral-500">Last Scraped:</span> {new Date(a.last_scraped).toLocaleString()}</div>)}
+                </div>
+              </Card>
+            )}
+          </>
         )}
       </div>
     </div>
