@@ -259,7 +259,7 @@ type Architect = {
 
   // system fields
   raw?: any;
-  scrape?: { sessionId?: string; status?: string; startedAt?: number };
+  scrape?: { sessionId?: string; status?: string; startedAt?: number; statusUpdatedAt?: number };
 
   // SCRAPE-ONLY (optional) — names do NOT collide with base keys
   // identity
@@ -374,6 +374,18 @@ function latestStatusPerArchitect(rows: any[]) {
     }
   }
   return map;
+}
+
+// Safe JSON parsing helper (handles incomplete ngrok responses)
+async function safeJson<T = any>(res: Response): Promise<T | null> {
+  try {
+    // Some ngrok responses can be incomplete during tunneling; guard it.
+    const txt = await res.text();
+    if (!txt) return null;
+    return JSON.parse(txt) as T;
+  } catch {
+    return null;
+  }
 }
 
 type ApiItem = any; // defensive: map fields below
@@ -694,7 +706,7 @@ export default function ArchiFiUIFresh() {
       const merged = [...cur];
       for (const p of picked) {
         const rawOfThis = payload.find((x: any) => String(x.id) === String(p.id)) ?? p.raw ?? null;
-        const mark = { ...p, raw: rawOfThis, scrape: { sessionId: clientSession, status: "inprogress", startedAt: Date.now() } };
+        const mark = { ...p, raw: rawOfThis, scrape: { sessionId: clientSession, status: "inprogress", startedAt: Date.now(), statusUpdatedAt: Date.now() } };
         if (!ids.has(p.id)) merged.push(mark);
         else merged.forEach((x, i) => { if (x.id === p.id) merged[i] = mark; });
       }
@@ -735,7 +747,7 @@ export default function ArchiFiUIFresh() {
           if (!d) return r;
 
           const patch = mapScrapeToPatch(d);
-          return patch ? { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession } } : r;
+          return patch ? { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession, statusUpdatedAt: Date.now() } } : r;
         }));
       } else {
         // Backend online but returned only session OR backend offline scenario:
@@ -745,7 +757,7 @@ export default function ArchiFiUIFresh() {
 
           if (!patch) return r;
 
-          return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession } };
+          return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: effectiveSession, statusUpdatedAt: Date.now() } };
         }));
       }
 
@@ -759,7 +771,7 @@ export default function ArchiFiUIFresh() {
 
         if (!patch) return r;
 
-        return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: clientSession } };
+        return { ...r, ...patch, scrape: { ...(r.scrape||{}), status: "success", sessionId: clientSession, statusUpdatedAt: Date.now() } };
       }));
     }
   }
@@ -797,63 +809,60 @@ export default function ArchiFiUIFresh() {
       const res = await fetch(`${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
       if (!res.ok) {
         console.warn("status poll failed:", res.status);
+        return; // do not change state on fetch error
+      }
+
+      const data = await safeJson<any[]>(res);
+      if (!Array.isArray(data) || data.length === 0) {
+        // No events this tick — keep polling
         return;
       }
-      const arr = await res.json();
-      if (!Array.isArray(arr)) return;
 
-      // Use latest status per architect by created_at
-      const latest = latestStatusPerArchitect(arr);
+      // We only care about events for this session
+      const events = data.filter(e => e?.session === sessionId);
 
-      // Update statuses with non-regression protection
-      setReview(cur => cur.map(r => {
-        if (r.scrape?.sessionId !== sessionId) return r;
+      if (events.length === 0) return;
 
-        const key = String(r.raw?.id ?? r.id);
-        const row = latest[key];
-        if (!row) return r;
+      // Apply "newer wins" using created_at
+      setReview(prev => {
+        const byId = new Map(prev.map(c => [String(c.id), c]));
+        for (const e of events) {
+          const archId = String(e.architect_id ?? e.id ?? "");
+          const card = byId.get(archId);
+          if (!card) continue;
 
-        const next = normStatus(row.status);
-        const prevS = normStatus(r.scrape?.status);
+          const s = normStatus(e.status); // expect "inprogress" | "success" | "failed"
+          if (!s) continue;
 
-        // Never regress terminal → non-terminal
-        if (TERMINAL_STATUSES.has(prevS)) return r;
+          const eventTs = new Date(e.created_at ?? Date.now()).getTime();
+          const prevTs = card.scrape?.statusUpdatedAt ?? 0;
 
-        // Hydrate details from latest if available
-        const patch = mapScrapeToPatch(row);
+          // Only update if this event is newer than what we have
+          if (eventTs > prevTs) {
+            const updatedCard = {
+              ...card,
+              scrape: {
+                ...(card.scrape ?? {}),
+                sessionId,
+                status: s,
+                statusUpdatedAt: eventTs,
+              },
+            };
 
-        return {
-          ...r,
-          ...(patch || {}),
-          scrape: { ...(r.scrape || {}), sessionId, status: next, lastUpdateAt: Date.now() }
-        };
-      }));
+            // Hydrate details from event if available
+            const patch = mapScrapeToPatch(e);
+            if (patch) {
+              Object.assign(updatedCard, patch);
+            }
 
-      // Hydrate details for any rows that have enrichment fields
-      const byIdDetails: Record<string, any> = {};
-      for (const s of arr) {
-        const looksDetailed =
-          s.email !== undefined || s.website !== undefined ||
-          s.company_bio !== undefined || s.address !== undefined ||
-          s.linkedin_profile_url !== undefined || s.company_linkedin_profile_url !== undefined;
-
-        if (!looksDetailed) continue;
-        const id = String(s.architect_id ?? s.id ?? "");
-        if (id) byIdDetails[id] = s;
-      }
-
-      if (Object.keys(byIdDetails).length) {
-        setReview(cur => cur.map(r => {
-          if (r.scrape?.sessionId !== sessionId) return r;
-          const d = byIdDetails[r.id] ?? byIdDetails[String(r.id)];
-          if (!d) return r;
-
-          const patch = mapScrapeToPatch(d);
-          return patch ? { ...r, ...patch } : r;
-        }));
-      }
-    } catch (e) {
-      console.warn("status poll error", e);
+            byId.set(archId, updatedCard);
+          }
+        }
+        return Array.from(byId.values());
+      });
+    } catch (err) {
+      console.warn("status poll error", err);
+      // swallow; keep polling
     }
   }
 
@@ -1084,9 +1093,9 @@ export default function ArchiFiUIFresh() {
                                     post_code: a.postcode, address: a.address
                                   }];
                                   // mark as inprogress
-                                  setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "inprogress", startedAt: Date.now() } } : r));
+                                  setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "inprogress", startedAt: Date.now(), statusUpdatedAt: Date.now() } } : r));
                                   postJSON(SCRAPE_ENDPOINT, body).then(() => setTimeout(()=>setScrapeTicker(t=>t+1), 1500)).catch(() => {
-                                    setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "failed" } } : r));
+                                    setReview(cur => cur.map(r => r.id===a.id ? { ...r, scrape: { sessionId: session, status: "failed", statusUpdatedAt: Date.now() } } : r));
                                   });
                                 }}
                               >
