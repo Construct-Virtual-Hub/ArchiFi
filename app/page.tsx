@@ -1179,7 +1179,7 @@ export default function ArchiFiUIFresh() {
 
               <Card className="col-span-12 h-full overflow-hidden p-0 lg:col-span-6">
                 <div className="border-b border-neutral-200 px-4 py-3 text-sm font-medium text-neutral-700">Architect Details</div>
-                <div className="min-w-0 overflow-y-auto overflow-x-hidden p-4">
+                <div className="nice-scroll overflow-y-auto overflow-x-hidden mt-4 min-h-0 max-h-[calc(100vh-220px)] overscroll-contain p-4">
                   {detailsId ? (
                     <ArchiDetails a={review.find((x) => x.id === detailsId)!} />
                   ) : (
