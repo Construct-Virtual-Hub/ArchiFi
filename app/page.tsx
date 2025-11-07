@@ -155,7 +155,7 @@ const OUTREACH_STATUS_BASE =
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
-  name: "Jarib Lad-Wetshi",
+  name: "magnus_wetshi",
   profile_url: "https://www.linkedin.com/in/jarib-lad-wetshi-8030a11b5/",
   business_name: "Jarib Lad-Wetshi",
 } as const;
