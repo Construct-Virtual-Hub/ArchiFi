@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -147,6 +147,56 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
   return Object.keys(patch).length ? patch : null;
 }
 
+// --- Outreach endpoints ---
+const OUTREACH_POST =
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd";
+const OUTREACH_STATUS_BASE =
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
+
+type OutreachPlatform = "linkedin" | "instagram";
+type OutreachTerminal = "success" | "failed";
+type OutreachProgress = "queued" | "inprogress" | OutreachTerminal;
+
+type OutreachActionSpec = {
+  action: "follow" | "connect" | "like" | "message";
+  item: "account" | "post";
+  item_count?: number;
+  message_content?: string;
+};
+
+type OutreachRequest = {
+  url: string;
+  architect_name: string;
+  account_type: "personal" | "company";
+  actions: OutreachActionSpec[];
+  client: { name: string; profile_url: string; business_name: string };
+  purpose: "outreach";
+  platform: OutreachPlatform;
+};
+
+type OutreachStatusItem = {
+  id: number;
+  created_at: string;
+  session: string;
+  architect_id: number;
+  status: OutreachProgress;
+  platform: OutreachPlatform;
+  purpose: "outreach";
+  // optional fields returned by backend; keep them if present
+  actions?: OutreachActionSpec[];
+  follow_status?: OutreachProgress | null;
+  connection_status?: OutreachProgress | null;
+  like_post_count?: number | null;
+  message_status?: OutreachProgress | null;
+  client?: { name: string; profile_url: string; business_name: string };
+  url?: string;
+  username?: string;
+};
+
+// map of sessionId -> setInterval id
+const OUTREACH_POLL_INTERVAL_MS = 10_000;
+const OUTREACH_TERMINALS: OutreachTerminal[] = ["success", "failed"];
+
 // --- Enriched mock records keyed by id (fields mirror your scrape POST output) ---
 const MOCK_ENRICHED_BY_ID: Record<string, any> = {
   "124923": {
@@ -265,6 +315,11 @@ type Architect = {
   raw?: any;
   scrape?: { sessionId?: string; status?: string; startedAt?: number; statusUpdatedAt?: number };
 
+  // outreach runtime fields
+  outreachSession?: string;
+  outreachPlatform?: OutreachPlatform;
+  outreachStatus?: OutreachProgress;
+
   // SCRAPE-ONLY (optional) — names do NOT collide with base keys
   // identity
   full_name?: string;
@@ -360,6 +415,7 @@ const SCRAPE_ENDPOINT = "/api/scrape";
 const SCRAPE_STATUS_ENDPOINT = "/api/scrape-status";
 const DETAILS_ENDPOINT = "/api/architect-details"; // optional; will no-op if 501
 
+
 // Fetch latest scraped details for specific architect ids.
 // We re-use the scrape POST endpoint by sending only {id} entries.
 // Backend responds with enriched records for completed ones.
@@ -390,6 +446,41 @@ function deepMergeArchitect<T extends Record<string, any>>(base: T, patch: Parti
     }
   }
   return out as T;
+}
+
+function pickSocialUrl(arch: Architect, platform: OutreachPlatform): string | undefined {
+  // Prefer person profile, fall back to company profile
+  if (platform === "linkedin") {
+    return (
+      arch.linkedin_profile_url ||
+      arch.company_linkedin_profile_url ||
+      arch.socials?.linkedin ||
+      undefined
+    )?.trim() || undefined;
+  }
+  // instagram
+  return (
+    arch.instagram_profile_url ||
+    arch.company_instagram_profile_url ||
+    arch.socials?.instagram ||
+    undefined
+  )?.trim() || undefined;
+}
+
+function defaultActions(platform: OutreachPlatform): OutreachActionSpec[] {
+  // keep it minimal; matches your example structures
+  const base: OutreachActionSpec[] = [
+    { action: "follow", item: "account" },
+    { action: "connect", item: "account" },
+    { action: "like", item: "post", item_count: 3 },
+  ];
+  return base;
+}
+
+function normOutreachStatus(s: string | null | undefined): OutreachProgress {
+  const v = (s || "").toLowerCase();
+  if (v === "success" || v === "failed" || v === "queued" || v === "inprogress") return v;
+  return "inprogress";
 }
 
 // --- Scrape status helpers (place near other helpers) ---
@@ -545,6 +636,176 @@ export default function ArchiFiUIFresh() {
   const [reviewSelected, setReviewSelected] = useState<Record<string, boolean>>({});
   const [outreachSelected, setOutreachSelected] = useState<Record<string, boolean>>({});
   const [outreach, setOutreach] = useState<Architect[]>([]);
+
+  const outreachTimersRef = useRef<Record<string, number>>({}); // session -> intervalId
+
+  useEffect(() => {
+    return () => {
+      Object.keys(outreachTimersRef.current).forEach(stopOutreachPolling);
+    };
+  }, []);
+
+  function stopOutreachPolling(sessionId: string) {
+    const timers = outreachTimersRef.current;
+    if (timers[sessionId]) {
+      clearInterval(timers[sessionId]);
+      delete timers[sessionId];
+    }
+  }
+
+  function startOutreachPolling(sessionId: string) {
+    stopOutreachPolling(sessionId);
+
+    const tick = async () => {
+      try {
+        const res = await fetch(OUTREACH_STATUS_BASE + encodeURIComponent(sessionId));
+        if (!res.ok) return;
+        const list: OutreachStatusItem[] = await res.json();
+        if (!Array.isArray(list)) return;
+
+        const statusByArchitect = new Map<string, OutreachStatusItem>();
+        for (const item of list) {
+          const key = String(item.architect_id ?? item.id ?? "");
+          if (!key) continue;
+          statusByArchitect.set(key, item);
+        }
+
+        let allTerminal = false;
+
+        setOutreach(prev => {
+          const next = prev.map(card => {
+            const cardKey = String(card.raw?.id ?? card.id ?? "");
+            const statusEntry = statusByArchitect.get(cardKey);
+            if (!statusEntry) return card;
+
+            if (card.outreachStatus && OUTREACH_TERMINALS.includes(card.outreachStatus as OutreachTerminal)) {
+              return card;
+            }
+
+            if (card.outreachSession && card.outreachSession !== sessionId) {
+              return card;
+            }
+
+            const status = normOutreachStatus(statusEntry.status);
+
+            return {
+              ...card,
+              outreachStatus: status,
+              outreachPlatform: statusEntry.platform ?? card.outreachPlatform,
+              outreachSession: statusEntry.session ?? card.outreachSession ?? sessionId,
+            };
+          });
+
+          const sessionCards = next.filter(card => card.outreachSession === sessionId);
+          allTerminal = sessionCards.length > 0 && sessionCards.every(card => card.outreachStatus && OUTREACH_TERMINALS.includes(card.outreachStatus as OutreachTerminal));
+          return next;
+        });
+
+        if (allTerminal) {
+          stopOutreachPolling(sessionId);
+        }
+      } catch {
+        // swallow errors; try again next interval
+      }
+    };
+
+    void tick();
+    outreachTimersRef.current[sessionId] = window.setInterval(tick, OUTREACH_POLL_INTERVAL_MS);
+  }
+
+  async function postOutreachForCards(cards: Architect[], platform: OutreachPlatform) {
+    if (!cards.length) return;
+
+    const payload: OutreachRequest[] = [];
+    const eligibleIds = new Set<string>();
+
+    for (const a of cards) {
+      const url = pickSocialUrl(a, platform);
+      if (!url) continue;
+
+      eligibleIds.add(String(a.id));
+      payload.push({
+        url,
+        architect_name: a.full_name || a.name || "Unknown",
+        account_type: "personal",
+        actions: defaultActions(platform),
+        client: {
+          name: "Magnum Claude",
+          profile_url:
+            platform === "instagram"
+              ? "https://www.instagram.com/magnus_wetshi/"
+              : "https://www.linkedin.com/magnus_wetshi/",
+          business_name: "lofthouse",
+        },
+        purpose: "outreach",
+        platform,
+      });
+    }
+
+    if (!payload.length) return;
+
+    setOutreach(prev =>
+      prev.map(card => {
+        if (!eligibleIds.has(String(card.id))) return card;
+        return {
+          ...card,
+          outreachStatus: "inprogress",
+          outreachPlatform: platform,
+        };
+      })
+    );
+
+    try {
+      const res = await fetch(OUTREACH_POST, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      let sessionId: string | undefined;
+      try {
+        const data = await res.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const first: any = Array.isArray(data) ? data[0] : data;
+        sessionId = first?.session || first?.session_id || undefined;
+      } catch {
+        sessionId = undefined;
+      }
+
+      if (sessionId) {
+        setOutreach(prev =>
+          prev.map(card => {
+            if (!eligibleIds.has(String(card.id))) return card;
+            return {
+              ...card,
+              outreachSession: sessionId,
+            };
+          })
+        );
+        startOutreachPolling(sessionId);
+      }
+    } catch {
+      setOutreach(prev =>
+        prev.map(card => {
+          if (!eligibleIds.has(String(card.id))) return card;
+          return {
+            ...card,
+            outreachStatus: "failed",
+            outreachPlatform: platform,
+          };
+        })
+      );
+    }
+  }
+
+  const outreachPlatformOptions: OutreachPlatform[] = ["linkedin", "instagram"];
+  const outreachPlatformLabel = (p: OutreachPlatform) => (p === "instagram" ? "Instagram" : "LinkedIn");
+  const labelToOutreachPlatform = (label: string): OutreachPlatform =>
+    label.toLowerCase() === "instagram" ? "instagram" : "linkedin";
 
   const [scrapeSessionId, setScrapeSessionId] = useState<string | null>(null);
   const [scrapeTicker, setScrapeTicker] = useState<number>(0); // used to re-trigger polling (legacy, may be removed)
@@ -869,9 +1130,6 @@ export default function ArchiFiUIFresh() {
     }
   }
 
-  const [outreachPlatform, setOutreachPlatform] = useState<Record<string, string>>({});
-  const platforms = ["LinkedIn", "Email", "Instagram", "Facebook", "WhatsApp", "Call"];
-
   // Polling functions
   async function pollScrapeStatusOnce(sessionId: string) {
     // Call the ngrok status endpoint you wired earlier
@@ -1001,9 +1259,9 @@ export default function ArchiFiUIFresh() {
     setDetailsId(null);
   }
   function clearOutreach() {
+    Object.keys(outreachTimersRef.current).forEach(stopOutreachPolling);
     setOutreach([]);
     setOutreachSelected({});
-    setOutreachPlatform({});
   }
 
   return (
@@ -1166,7 +1424,13 @@ export default function ArchiFiUIFresh() {
                       const chosen = hasAny ? review.filter(r=>reviewSelected[r.id]) : review;
                       setOutreach(prev => {
                         const ids = new Set(prev.map(x=>x.id));
-                        const add = chosen.filter(c=>!ids.has(c.id));
+                        const add = chosen
+                          .filter(c=>!ids.has(c.id))
+                          .map(c => ({
+                            ...c,
+                            outreachPlatform: c.outreachPlatform ?? "linkedin",
+                            outreachStatus: c.outreachStatus ?? "queued",
+                          }));
                         return [...prev, ...add];
                       });
                       setOutreachSelected(prev=>({ ...prev, ...Object.fromEntries(chosen.map(c=>[c.id,true])) }));
@@ -1256,43 +1520,84 @@ export default function ArchiFiUIFresh() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Btn variant="outline" className="h-8 px-3 py-1 text-xs rounded-xl" onClick={clearOutreach}>Clear Outreach</Btn>
-                  <Btn variant="outline" className="h-8 px-3 py-1 text-xs rounded-xl" onClick={() => {
-                    const chosen = outreach.filter(r => outreachSelected[r.id]);
-                    alert(`${chosen.length || 0} architect(s) queued for outreach`);
-                  }}>Reach out to selected Architects</Btn>
+                  <Btn
+                    variant="outline"
+                    className="h-8 px-3 py-1 text-xs rounded-xl"
+                    onClick={async () => {
+                      const chosen = outreach.filter(r => outreachSelected[r.id]);
+                      if (!chosen.length) return;
+                      const groupedByPlatform: Record<OutreachPlatform, Architect[]> = { linkedin: [], instagram: [] };
+                      for (const c of chosen) {
+                        const p = (c.outreachPlatform ?? "linkedin") as OutreachPlatform;
+                        groupedByPlatform[p].push(c);
+                      }
+                      await Promise.all([
+                        groupedByPlatform.linkedin.length ? postOutreachForCards(groupedByPlatform.linkedin, "linkedin") : Promise.resolve(),
+                        groupedByPlatform.instagram.length ? postOutreachForCards(groupedByPlatform.instagram, "instagram") : Promise.resolve(),
+                      ]);
+                    }}
+                  >
+                    Reach out to selected Architects
+                  </Btn>
                 </div>
               </div>
               <div className="grid h-[calc(72vh-56px)] grid-cols-1 gap-3 overflow-y-auto p-3 md:grid-cols-2">
-                {outreach.map((a) => (
-                  <Card key={a.id} className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
-                        <div className="mt-1 text-xs text-neutral-500">{a.city} • {a.postcode}</div>
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-neutral-600">
-                          <div className="truncate">Company: {a.company}</div>
-                          <div className="truncate">Specialty: {a.specialty}</div>
-                          <div className="truncate">Type: {a.projectType}</div>
-                          <div className="truncate">Value: {a.valueMillions}m</div>
+                {outreach.map((a) => {
+                  const currentPlatform = (a.outreachPlatform ?? "linkedin") as OutreachPlatform;
+                  const currentPlatformLabel = outreachPlatformLabel(currentPlatform);
+                  const canReachOut = !!pickSocialUrl(a, currentPlatform);
+                  const statusValue = a.outreachStatus ?? (outreachSelected[a.id] ? "queued" : undefined);
+                  const statusLabel = statusValue
+                    ? statusValue === "inprogress"
+                      ? "In progress"
+                      : statusValue.charAt(0).toUpperCase() + statusValue.slice(1)
+                    : "Not started";
+
+                  return (
+                    <Card key={a.id} className="p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
+                          <div className="mt-1 text-xs text-neutral-500">{a.city} • {a.postcode}</div>
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-neutral-600">
+                            <div className="truncate">Company: {a.company}</div>
+                            <div className="truncate">Specialty: {a.specialty}</div>
+                            <div className="truncate">Type: {a.projectType}</div>
+                            <div className="truncate">Value: {a.valueMillions}m</div>
+                          </div>
                         </div>
+                        <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
+                          <input onClick={(e)=>e.stopPropagation()} type="checkbox" checked={!!outreachSelected[a.id]} onChange={() => setOutreachSelected(p=>({ ...p, [a.id]: !p[a.id] }))} className="h-4 w-4 rounded border-neutral-300 accent-neutral-900" />
+                          <span className="hidden sm:inline">Select</span>
+                        </label>
                       </div>
-                      <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
-                        <input onClick={(e)=>e.stopPropagation()} type="checkbox" checked={!!outreachSelected[a.id]} onChange={() => setOutreachSelected(p=>({ ...p, [a.id]: !p[a.id] }))} className="h-4 w-4 rounded border-neutral-300 accent-neutral-900" />
-                        <span className="hidden sm:inline">Select</span>
-                      </label>
-                    </div>
-                    <Divider />
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      <Select value={outreachPlatform[a.id] || "LinkedIn"} onChange={(v) => setOutreachPlatform((p) => ({ ...p, [a.id]: v }))} options={["LinkedIn", "Email", "Instagram", "Facebook", "WhatsApp", "Call"]} />
-                      <Btn onClick={() => alert(`${a.name}: Reach out via ${outreachPlatform[a.id] || "LinkedIn"}`)}>Reach Out</Btn>
-                    </div>
-                    <Card className="mt-3 p-3 text-xs text-neutral-600">
-                      <div className="font-medium text-neutral-700">Outreach Status</div>
-                      <div className="mt-1">Platform: {outreachPlatform[a.id] || "LinkedIn"}</div>
-                      <div>Status: {outreachSelected[a.id] ? "Queued" : "Not started"}</div>
+                      <Divider />
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <Select
+                          value={currentPlatformLabel}
+                          onChange={(v) => {
+                            const nextPlatform = labelToOutreachPlatform(v);
+                            setOutreach(prev => prev.map(card => card.id === a.id ? { ...card, outreachPlatform: nextPlatform } : card));
+                          }}
+                          options={outreachPlatformOptions.map(outreachPlatformLabel)}
+                        />
+                        <Btn
+                          onClick={async () => {
+                            await postOutreachForCards([a], currentPlatform);
+                          }}
+                          disabled={!canReachOut}
+                        >
+                          Reach Out
+                        </Btn>
+                      </div>
+                      <Card className="mt-3 p-3 text-xs text-neutral-600">
+                        <div className="font-medium text-neutral-700">Outreach Status</div>
+                        <div className="mt-1">Platform: {currentPlatformLabel}</div>
+                        <div>Status: {statusLabel}</div>
+                      </Card>
                     </Card>
-                  </Card>
-                ))}
+                  );
+                })}
                 {outreach.length === 0 && (
                   <div className="col-span-full flex h-[40vh] items-center justify-center text-sm text-neutral-500">No approved architects. Approve from Review.</div>
                 )}
