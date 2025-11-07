@@ -153,6 +153,13 @@ const OUTREACH_POST =
 const OUTREACH_STATUS_BASE =
   "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
 
+// New LinkedIn client (apply only to linkedin payloads)
+const LINKEDIN_CLIENT = {
+  name: "Jarib Lad-Wetshi",
+  profile_url: "https://www.linkedin.com/magnus_wetshi/",
+  business_name: "",
+} as const;
+
 type OutreachPlatform = "linkedin" | "instagram";
 type OutreachTerminal = "success" | "failed";
 type OutreachProgress = "queued" | "inprogress" | OutreachTerminal;
@@ -741,14 +748,14 @@ export default function ArchiFiUIFresh() {
         architect_name: a.full_name || a.name || "Unknown",
         account_type: "personal",
         actions: defaultActions(platform),
-        client: {
-          name: "Magnum Claude",
-          profile_url:
-            platform === "instagram"
-              ? "https://www.instagram.com/magnus_wetshi/"
-              : "https://www.linkedin.com/magnus_wetshi/",
-          business_name: "lofthouse",
-        },
+        client:
+          platform === "linkedin"
+            ? LINKEDIN_CLIENT
+            : {
+                name: "Magnum Claude",
+                profile_url: "https://www.instagram.com/magnus_wetshi/",
+                business_name: "lofthouse",
+              },
         purpose: "outreach",
         platform,
       });
