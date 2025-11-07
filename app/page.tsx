@@ -155,7 +155,14 @@ const OUTREACH_STATUS_BASE =
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
-  name: "Magnum Claude",
+  name: "magnus_wetshi",
+  profile_url: "https://www.linkedin.com/in/jarib-lad-wetshi-8030a11b5/",
+  business_name: "Jarib Lad-Wetshi",
+} as const;
+
+// Instagram client override (apply only to instagram payloads)
+const INSTAGRAM_CLIENT = {
+  name: "magnus_wetshi",
   profile_url: "https://www.linkedin.com/in/jarib-lad-wetshi-8030a11b5/",
   business_name: "Jarib Lad-Wetshi",
 } as const;
@@ -749,13 +756,9 @@ export default function ArchiFiUIFresh() {
         account_type: "personal",
         actions: defaultActions(platform),
         client:
-          platform === "linkedin"
-            ? LINKEDIN_CLIENT
-            : {
-                name: "Magnum Claude",
-                profile_url: "https://www.instagram.com/magnus_wetshi/",
-                business_name: "lofthouse",
-              },
+          platform === "instagram"
+            ? INSTAGRAM_CLIENT
+            : LINKEDIN_CLIENT,
         purpose: "outreach",
         platform,
       });
