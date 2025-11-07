@@ -97,7 +97,7 @@ function patchFromScrape(d: any): Partial<Architect> | null {
 function mapScrapeToPatch(d: any): Partial<Architect> | null {
   if (!d || typeof d !== "object") return null;
 
-  const clean = (v: any) => (v === "" || v === null || v === undefined ? undefined : v);
+  const clean = (v: unknown): any => (typeof v === "string" ? v.trim() || undefined : v ?? undefined);
 
   const patch: Partial<Architect> = {
     // identity (optional)
@@ -326,14 +326,14 @@ type Architect = {
   company_name?: string;
 
   // personal socials (do not replace 'socials' object)
-  linkedin_profile_url?: string;
-  instagram_profile_url?: string;
-  facebook_profile_url?: string;
+  linkedin_profile_url?: string | null;
+  instagram_profile_url?: string | null;
+  facebook_profile_url?: string | null;
 
   // company socials
-  company_linkedin_profile_url?: string;
-  company_instagram_profile_url?: string;
-  company_facebook_profile_url?: string;
+  company_linkedin_profile_url?: string | null;
+  company_instagram_profile_url?: string | null;
+  company_facebook_profile_url?: string | null;
 
   // narrative
   company_bio?: string;
@@ -389,6 +389,12 @@ function makeMock(n = 24): Architect[] {
         instagram: `https://instagram.com/${c.split(" ")[0].toLowerCase()}_${i + 1}`,
         facebook: `https://facebook.com/${domain}`,
       },
+      linkedin_profile_url: `https://linkedin.com/in/architect-${i + 1}`,
+      instagram_profile_url: `https://instagram.com/architect_${i + 1}`,
+      facebook_profile_url: `https://facebook.com/${domain}`,
+      company_linkedin_profile_url: `https://www.linkedin.com/company/${domain}`,
+      company_instagram_profile_url: `https://www.instagram.com/${domain}`,
+      company_facebook_profile_url: `https://www.facebook.com/${domain}`,
       specialty: s,
       projectType: p,
       valueMillions: Math.min(5, Math.max(0, Math.round(val))),
@@ -564,6 +570,12 @@ function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
     phone,
     website: x.website ?? x.url ?? "",
     socials,
+    linkedin_profile_url: x.linkedin_profile_url ?? undefined,
+    instagram_profile_url: x.instagram_profile_url ?? undefined,
+    facebook_profile_url: x.facebook_profile_url ?? undefined,
+    company_linkedin_profile_url: x.company_linkedin_profile_url ?? undefined,
+    company_instagram_profile_url: x.company_instagram_profile_url ?? undefined,
+    company_facebook_profile_url: x.company_facebook_profile_url ?? undefined,
     specialty: x.specialty ?? x.speciality ?? "Residential",
     projectType: x.projectType ?? x.type ?? "New Build",
     valueMillions: Number.isFinite(x.valueMillions) ? Number(x.valueMillions) : 0,
@@ -1622,6 +1634,21 @@ const LabelRow: React.FC<{ icon?: React.ReactNode; label: string; value?: React.
 function ArchiDetails({ a }: { a: Architect }) {
   const polledSuccess = normStatus(a.scrape?.status) === "success";
 
+  const isUrl = (s?: string | null) => !!s && typeof s === "string" && /^https?:\/\//i.test(s);
+
+  const SocialPill: React.FC<{ href: string; label: string; kind: "Personal" | "Company" }> = ({ href, label, kind }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50"
+    >
+      <LinkIcon className="h-3.5 w-3.5" />
+      <span className="font-medium">{label}</span>
+      <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] leading-none text-neutral-600">{kind}</span>
+    </a>
+  );
+
   return (
     <div className="min-w-0 space-y-3">
       <div className="text-base font-semibold text-neutral-900">{a.name}</div>
@@ -1649,22 +1676,35 @@ function ArchiDetails({ a }: { a: Architect }) {
           <>
             <Card className="p-3 md:col-span-2">
               <div className="text-sm font-medium text-neutral-700">Socials</div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {(a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url) && (
-                  <a href={a.socials?.linkedin || a.linkedin_profile_url || a.company_linkedin_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
-                    <LinkIcon className="h-3.5 w-3.5" /> LinkedIn
-                  </a>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                {isUrl(a.linkedin_profile_url) && (
+                  <SocialPill href={a.linkedin_profile_url!} label="LinkedIn" kind="Personal" />
                 )}
-                {(a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url) && (
-                  <a href={a.socials?.instagram || a.instagram_profile_url || a.company_instagram_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
-                    <LinkIcon className="h-3.5 w-3.5" /> Instagram
-                  </a>
+                {isUrl(a.instagram_profile_url) && (
+                  <SocialPill href={a.instagram_profile_url!} label="Instagram" kind="Personal" />
                 )}
-                {(a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url) && (
-                  <a href={a.socials?.facebook || a.facebook_profile_url || a.company_facebook_profile_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50">
-                    <LinkIcon className="h-3.5 w-3.5" /> Facebook
-                  </a>
+                {isUrl(a.facebook_profile_url) && (
+                  <SocialPill href={a.facebook_profile_url!} label="Facebook" kind="Personal" />
                 )}
+
+                {isUrl(a.company_linkedin_profile_url) && (
+                  <SocialPill href={a.company_linkedin_profile_url!} label="LinkedIn" kind="Company" />
+                )}
+                {isUrl(a.company_instagram_profile_url) && (
+                  <SocialPill href={a.company_instagram_profile_url!} label="Instagram" kind="Company" />
+                )}
+                {isUrl(a.company_facebook_profile_url) && (
+                  <SocialPill href={a.company_facebook_profile_url!} label="Facebook" kind="Company" />
+                )}
+
+                {!isUrl(a.linkedin_profile_url) &&
+                  !isUrl(a.instagram_profile_url) &&
+                  !isUrl(a.facebook_profile_url) &&
+                  !isUrl(a.company_linkedin_profile_url) &&
+                  !isUrl(a.company_instagram_profile_url) &&
+                  !isUrl(a.company_facebook_profile_url) && (
+                    <span className="text-sm text-neutral-400">No social profiles available.</span>
+                  )}
               </div>
             </Card>
 
