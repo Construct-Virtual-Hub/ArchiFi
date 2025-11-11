@@ -3,6 +3,7 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon } from "lucide-react";
 import { motion } from "framer-motion";
+import AuthGate from "../components/AuthGate";
 
 // --- DEMO FLAG ---
 // Toggle to true for demo-only UI changes (hide job filter, placeholder library).
@@ -152,6 +153,8 @@ const OUTREACH_POST =
   "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd";
 const OUTREACH_STATUS_BASE =
   "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
+const GET_ARCHITECT_DETAILS =
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
@@ -452,6 +455,16 @@ async function fetchScrapedDetailsByIds(ids: string[]): Promise<any[]> {
   return Array.isArray(data) ? data : [data];
 }
 
+async function fetchArchitectDetailsById(architectId: number) {
+  const res = await fetch(GET_ARCHITECT_DETAILS, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ architect_id: architectId }),
+  });
+  if (!res.ok) throw new Error(`Details fetch failed (${res.status})`);
+  return (await res.json()) as any;
+}
+
 function deepMergeArchitect<T extends Record<string, any>>(base: T, patch: Partial<T>): T {
   // Only assign keys that are not undefined/null/empty string in the patch.
   // Shallow-merge nested objects like `scrape`/`contact` if present.
@@ -503,12 +516,43 @@ function normOutreachStatus(s: string | null | undefined): OutreachProgress {
   return "inprogress";
 }
 
+function getLoggedInEmail(): string | undefined {
+  try {
+    const raw = typeof window !== "undefined" ? localStorage.getItem("archifi:user") : null;
+    if (!raw) return undefined;
+    const obj = JSON.parse(raw);
+    const email = (obj?.email || "").toString().trim();
+    return email || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // --- Scrape status helpers (place near other helpers) ---
 // Terminal statuses we accept from the status endpoint
 const TERMINAL_STATUSES = new Set(["success", "failed"]);
 
 function normStatus(s?: string) {
   return (s || "").trim().toLowerCase();
+}
+
+function latestStatusPerArchitect(rows: any[]): Map<string, any> {
+  const latest = new Map<string, any>();
+  for (const row of rows || []) {
+    const key = String(row?.architect_id ?? row?.id ?? "");
+    if (!key) continue;
+    const current = latest.get(key);
+    if (!current) {
+      latest.set(key, row);
+      continue;
+    }
+    const currDate = new Date(current.created_at ?? 0).getTime();
+    const nextDate = new Date(row.created_at ?? 0).getTime();
+    if (Number.isFinite(nextDate) && nextDate > currDate) {
+      latest.set(key, row);
+    }
+  }
+  return latest;
 }
 
 // Safe JSON parsing helper (handles incomplete ngrok responses)
@@ -658,6 +702,7 @@ export default function ArchiFiUIFresh() {
 
   const [activeTab, setActiveTab] = useState<"discover" | "review" | "outreach">("discover");
   const [detailsId, setDetailsId] = useState<string | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
 
   const [reviewSelected, setReviewSelected] = useState<Record<string, boolean>>({});
   const [outreachSelected, setOutreachSelected] = useState<Record<string, boolean>>({});
@@ -778,10 +823,20 @@ export default function ArchiFiUIFresh() {
     );
 
     try {
+      const loggedEmail = getLoggedInEmail();
+      if (!loggedEmail) {
+        console.warn("No signed-in email found for outreach; using fallback identity.");
+      }
+
+      const requestBody = {
+        outreach: payload,
+        currently_logged_in_email: loggedEmail ?? "unknown@archifi.local",
+      };
+
       const res = await fetch(OUTREACH_POST, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(requestBody),
       });
 
       if (!res.ok) {
@@ -835,6 +890,8 @@ export default function ArchiFiUIFresh() {
   // Ref for reading latest review state inside polling intervals
   const reviewRef = React.useRef(review);
   useEffect(() => { reviewRef.current = review; }, [review]);
+  const detailsIdRef = React.useRef<string | null>(detailsId);
+  useEffect(() => { detailsIdRef.current = detailsId; }, [detailsId]);
 
   // Ref for selected IDs in scrape POST handler
   const selectedIdsRef = React.useRef<Set<string>>(new Set());
@@ -870,6 +927,7 @@ export default function ArchiFiUIFresh() {
   // Otherwise (mock/local), keep existing client paging via pageItems.
   const serverPaging = apiPages.length > 0;
   const visibleItems = serverPaging ? discover : pageItems;
+  const selectedReview = detailsId ? review.find((x) => x.id === detailsId) : null;
 
   async function runSearch() {
     try {
@@ -1026,7 +1084,16 @@ export default function ArchiFiUIFresh() {
     setActiveTab("review");
 
     try {
-      const resp = await postJSON(SCRAPE_ENDPOINT, payload);
+      const loggedEmail = getLoggedInEmail();
+      if (!loggedEmail) {
+        console.warn("No signed-in email found; using fallback identity.");
+      }
+      const requestBody = {
+        architects: payload,
+        currently_logged_in_email: loggedEmail ?? "unknown@archifi.local",
+      };
+
+      const resp = await postJSON(SCRAPE_ENDPOINT, requestBody);
 
       let serverSession: string | null = null;
 
@@ -1160,108 +1227,114 @@ export default function ArchiFiUIFresh() {
       `${SCRAPE_STATUS_ENDPOINT}?session=${encodeURIComponent(sessionId)}`,
       { method: "GET", cache: "no-store" }
     );
-    if (!res.ok) throw new Error(`status fetch failed: ${res.status}`);
-    const list = await safeJson<Array<any>>(res);
-    if (!Array.isArray(list)) return [];
-
-    // Reduce to latest status per architect_id using created_at
-    const latest = new Map<string, any>();
-    for (const row of list || []) {
-      const id = String(row.architect_id ?? "");
-      if (!id) continue;
-      const curr = latest.get(id);
-      if (!curr || new Date(row.created_at) > new Date(curr.created_at)) {
-        latest.set(id, row);
-      }
-    }
-
-    return Array.from(latest.values());
+  if (!res.ok) throw new Error(`status fetch failed: ${res.status}`);
+  const list = await safeJson<Array<any>>(res);
+  if (!Array.isArray(list)) return [];
+  return list;
   }
 
   // Keep a single interval per active session
-  const scrapeIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
-  const startedAtRef = React.useRef<number>(0);
+  const scrapeIntervalRef = React.useRef<number | null>(null);
+  const activeScrapeSessionRef = React.useRef<string | null>(null);
 
   function stopScrapePolling() {
     if (scrapeIntervalRef.current !== null) {
       clearInterval(scrapeIntervalRef.current);
       scrapeIntervalRef.current = null;
     }
+    activeScrapeSessionRef.current = null;
   }
 
   function startScrapePolling(sessionId: string) {
-    // Always reset interval (test phase: poll continuously)
-    stopScrapePolling();
-    startedAtRef.current = Date.now();
+    if (scrapeIntervalRef.current) {
+      if (activeScrapeSessionRef.current === sessionId) return;
+      stopScrapePolling();
+    }
 
     const tick = async () => {
       try {
-        const latestStatuses = await pollScrapeStatusOnce(sessionId);
-        if (!latestStatuses.length) return;
+        const statuses = await pollScrapeStatusOnce(sessionId);
+        if (!statuses.length) return;
+
+        const latestById = latestStatusPerArchitect(statuses);
+        if (!latestById.size) return;
 
         const newlySuccessfulIds: string[] = [];
-        let anyPending = false;
+        let snapshot: Architect[] = reviewRef.current;
 
-        for (const row of latestStatuses) {
-          const id = String(row.architect_id);
-          const next = normStatus(row.status);
+        setReview(prev => {
+          const nextState = prev.map(card => {
+            const key = String(card.id);
+            const statusEntry = latestById.get(key);
+            if (!statusEntry) return card;
 
-          const idx = reviewRef.current.findIndex(a => String(a.id) === id);
-          if (idx === -1) continue;
+            const prevStatus = normStatus(card.scrape?.status);
+            const candidateStatus = normStatus(statusEntry.status);
+            const nextStatus = TERMINAL_STATUSES.has(prevStatus) ? prevStatus : candidateStatus;
 
-          const prev = normStatus(reviewRef.current[idx]?.scrape?.status);
-          const alreadyTerminal = TERMINAL_STATUSES.has(prev);
+            if (nextStatus === prevStatus && card.scrape?.sessionId === sessionId) {
+              return card;
+            }
 
-          // Only let polled status drive transitions; never regress terminal -> inprogress
-          if (!alreadyTerminal) {
-            // write the polled status as-is (inprogress | success | failed)
-            anyPending = true;
-            setReview(curr => curr.map(a => {
-              if (String(a.id) !== id) return a;
-              return deepMergeArchitect(a, {
-                scrape: { ...(a.scrape ?? {}), status: next }
-              });
-            }));
+            if (nextStatus === "success" && prevStatus !== "success") {
+              newlySuccessfulIds.push(key);
+            }
 
-            if (next === "success") newlySuccessfulIds.push(id);
-          }
-        }
-
-        // If some became success this tick, fetch their details now and hydrate panel/list
-        if (newlySuccessfulIds.length) {
-          fetchScrapedDetailsByIds(newlySuccessfulIds).then(details => {
-            if (!details?.length) return;
-            const patches = details.map(d => mapScrapeToPatch(d)).filter(Boolean);
-
-            // Merge into review list
-            setReview(curr => {
-              const byId = new Map(patches.map(p => [String(p.id), p]));
-              return curr.map(a => {
-                const p = byId.get(String(a.id));
-                return p ? deepMergeArchitect(a, p) : a;
-              });
+            return deepMergeArchitect(card, {
+              scrape: {
+                ...(card.scrape ?? {}),
+                status: nextStatus,
+                sessionId,
+              },
             });
-          }).catch(() => {});
+          });
+
+          snapshot = nextState;
+          return nextState;
+        });
+
+        if (newlySuccessfulIds.length) {
+          const uniqueSuccessIds = Array.from(new Set(newlySuccessfulIds));
+          fetchScrapedDetailsByIds(uniqueSuccessIds)
+            .then(details => {
+              if (!details?.length) return;
+              const patches = details.map(d => mapScrapeToPatch(d)).filter(Boolean);
+              if (!patches.length) return;
+
+              setReview(curr => {
+                const byId = new Map(
+                  patches
+                    .filter((p): p is Partial<Architect> & { id?: string | number } => !!p)
+                    .map(p => [String((p as any).id ?? ""), p])
+                );
+                if (!byId.size) return curr;
+
+                return curr.map(card => {
+                  const patch = byId.get(String(card.id));
+                  return patch ? deepMergeArchitect(card, patch) : card;
+                });
+              });
+            })
+            .catch(() => {});
         }
 
-        // Stop only when every architect in this session is terminal OR after a global timeout
-        const allTerminal = reviewRef.current
-          .filter(a => a.scrape?.sessionId === sessionId)
-          .every(a => TERMINAL_STATUSES.has(normStatus(a.scrape?.status)));
+        const allTerminal = snapshot
+          .filter(card => card.scrape?.sessionId === sessionId)
+          .every(card => TERMINAL_STATUSES.has(normStatus(card.scrape?.status)));
 
-        if (allTerminal) {
-          clearInterval(scrapeIntervalRef.current!);
+        if (allTerminal && scrapeIntervalRef.current) {
+          clearInterval(scrapeIntervalRef.current);
           scrapeIntervalRef.current = null;
-          return;
+          activeScrapeSessionRef.current = null;
         }
       } catch {
-        // silent; interval will try again in 10s
+        // silent; try again on next tick
       }
     };
 
-    // immediate tick + every 10s
-    tick();
-    scrapeIntervalRef.current = setInterval(tick, 10_000) as unknown as NodeJS.Timeout;
+    void tick();
+    scrapeIntervalRef.current = window.setInterval(tick, 10_000);
+    activeScrapeSessionRef.current = sessionId;
   }
 
   // Start polling when sessionId is set
@@ -1279,6 +1352,8 @@ export default function ArchiFiUIFresh() {
     setReview([]);
     setReviewSelected({});
     setDetailsId(null);
+    detailsIdRef.current = null;
+    setDetailsLoading(false);
   }
   function clearOutreach() {
     Object.keys(outreachTimersRef.current).forEach(stopOutreachPolling);
@@ -1286,7 +1361,46 @@ export default function ArchiFiUIFresh() {
     setOutreachSelected({});
   }
 
-  return (
+  async function handleSelectReviewArchitect(arch: Architect) {
+    setDetailsId(arch.id);
+    detailsIdRef.current = arch.id;
+
+    const sourceId = arch.raw?.id ?? arch.id;
+    let numericId = Number(sourceId);
+    if (!Number.isFinite(numericId)) {
+      const digits = String(sourceId ?? "").replace(/[^\d]/g, "");
+      numericId = digits ? Number(digits) : NaN;
+    }
+
+    if (!Number.isFinite(numericId)) {
+      setDetailsLoading((current) =>
+        detailsIdRef.current === arch.id ? false : current
+      );
+      return;
+    }
+
+    const selectionKey = String(arch.id);
+    setDetailsLoading(true);
+    try {
+      const fresh = await fetchArchitectDetailsById(numericId);
+      const patch = mapScrapeToPatch(fresh);
+      if (patch) {
+        setReview((prev) =>
+          prev.map((card) =>
+            String(card.id) === selectionKey ? deepMergeArchitect(card, patch) : card
+          )
+        );
+      }
+    } catch (error) {
+      console.warn("Failed to refresh architect details", error);
+    } finally {
+      setDetailsLoading((current) =>
+        detailsIdRef.current === selectionKey ? false : current
+      );
+    }
+  }
+
+  const pageContent = (
     <div className="min-h-[90vh] w-full min-w-0 overflow-hidden bg-neutral-50 p-4 sm:p-6">
       {/* Top bar */}
       <div className="mx-auto flex max-w-[1400px] items-center justify-between gap-4 rounded-2xl border border-neutral-200 bg-white/80 px-4 py-3 shadow-sm backdrop-blur">
@@ -1462,7 +1576,7 @@ export default function ArchiFiUIFresh() {
                 </div>
                 <div className="min-w-0 h-[calc(72vh-56px)] space-y-2 overflow-y-auto p-3 overscroll-contain">
                   {review.map((a) => (
-                    <Card key={a.id} onClick={() => setDetailsId(a.id)} className={`cursor-pointer p-4 ${detailsId === a.id ? "ring-1 ring-neutral-800" : ""}`}>
+                    <Card key={a.id} onClick={() => void handleSelectReviewArchitect(a)} className={`cursor-pointer p-4 ${detailsId === a.id ? "ring-1 ring-neutral-800" : ""}`}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
@@ -1521,8 +1635,8 @@ export default function ArchiFiUIFresh() {
               <Card className="col-span-12 h-full overflow-hidden p-0 lg:col-span-6">
                 <div className="border-b border-neutral-200 px-4 py-3 text-sm font-medium text-neutral-700">Architect Details</div>
                 <div className="nice-scroll overflow-y-auto overflow-x-hidden mt-4 min-h-0 max-h-[calc(100vh-220px)] overscroll-contain p-4">
-                  {detailsId ? (
-                    <ArchiDetails a={review.find((x) => x.id === detailsId)!} />
+                  {selectedReview ? (
+                    <ArchiDetails a={selectedReview} loading={detailsLoading} />
                   ) : (
                     <div className="flex h-[40vh] items-center justify-center text-sm text-neutral-500">Select an architect on the left to view details.</div>
                   )}
@@ -1630,6 +1744,8 @@ export default function ArchiFiUIFresh() {
       </div>
     </div>
   );
+
+  return <AuthGate>{pageContent}</AuthGate>;
 }
 
 // Details panel
@@ -1641,7 +1757,7 @@ const LabelRow: React.FC<{ icon?: React.ReactNode; label: string; value?: React.
   </div>
 );
 
-function ArchiDetails({ a }: { a: Architect }) {
+function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
   const polledSuccess = normStatus(a.scrape?.status) === "success";
 
   const isUrl = (s?: string | null) => !!s && typeof s === "string" && /^https?:\/\//i.test(s);
@@ -1661,6 +1777,9 @@ function ArchiDetails({ a }: { a: Architect }) {
 
   return (
     <div className="min-w-0 space-y-3">
+      {loading ? (
+        <div className="text-xs text-neutral-500">Refreshing details…</div>
+      ) : null}
       <div className="text-base font-semibold text-neutral-900">{a.name}</div>
       <div className="text-sm text-neutral-600">{a.company}</div>
       <Divider />
