@@ -162,7 +162,7 @@ const GET_ARCHITECT_DETAILS =
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
-  name: "magnus_wetshi",
+  name: "Jarib Lad-Wetshi",
   profile_url: "https://www.linkedin.com/in/jarib-lad-wetshi-8030a11b5/",
   business_name: "Jarib Lad-Wetshi",
 } as const;
@@ -1640,9 +1640,9 @@ export default function ArchiFiUIFresh() {
                 </div>
               </Card>
 
-              <Card className="col-span-12 h-full overflow-hidden p-0 lg:col-span-6">
+              <Card className="col-span-12 h-full overflow-hidden p-0 lg:col-span-6 flex flex-col min-h-0">
                 <div className="border-b border-neutral-200 px-4 py-3 text-sm font-medium text-neutral-700">Architect Details</div>
-                <div className="nice-scroll overflow-y-auto overflow-x-hidden mt-4 min-h-0 max-h-[calc(100vh-220px)] overscroll-contain p-4">
+                <div className="nice-scroll overflow-y-auto overflow-x-hidden mt-4 min-h-0 flex-1 overscroll-contain p-4 pb-6">
                   {selectedReview ? (
                     <ArchiDetails a={selectedReview} loading={detailsLoading} />
                   ) : (
