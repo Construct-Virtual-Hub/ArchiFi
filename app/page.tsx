@@ -162,7 +162,7 @@ const GET_ARCHITECT_DETAILS =
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
-  name: "magnus_wetshi",
+  name: "Jarib Lad-Wetshi",
   profile_url: "https://www.linkedin.com/in/jarib-lad-wetshi-8030a11b5/",
   business_name: "Jarib Lad-Wetshi",
 } as const;
