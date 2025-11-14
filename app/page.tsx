@@ -118,6 +118,10 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
     country: clean(d.country),
     post_code: clean(d.post_code),
     post_code_area: clean(d.post_code_area),
+    address_line_1: clean(d.address_line_1),
+    address_line2: clean(d.address_line2),
+    address_line3: clean(d.address_line3 ?? d.address_line_3),
+    address_line_4: clean(d.address_line_4),
 
     // socials (store raw links; UI already renders buttons)
     linkedin_profile_url: clean(d.linkedin_profile_url),
@@ -362,6 +366,10 @@ type Architect = {
   country?: string;
   post_code?: string;             // raw scraped field (kept separate from UI 'postcode')
   post_code_area?: string;
+  address_line_1?: string;
+  address_line2?: string;
+  address_line3?: string;
+  address_line_4?: string;
 
   // alternates
   alternate_phone?: string;
@@ -1758,22 +1766,11 @@ const LabelRow: React.FC<{ icon?: React.ReactNode; label: string; value?: React.
 );
 
 function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
-  const polledSuccess = normStatus(a.scrape?.status) === "success";
-
   const isUrl = (s?: string | null) => !!s && typeof s === "string" && /^https?:\/\//i.test(s);
 
-  const SocialPill: React.FC<{ href: string; label: string; kind: "Personal" | "Company" }> = ({ href, label, kind }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex items-center gap-2 rounded-xl border border-neutral-300 px-3 py-1 text-xs text-neutral-800 hover:bg-neutral-50"
-    >
-      <LinkIcon className="h-3.5 w-3.5" />
-      <span className="font-medium">{label}</span>
-      <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] leading-none text-neutral-600">{kind}</span>
-    </a>
-  );
+  const formatValue = (value: string | null | undefined): string => {
+    return value ?? "";
+  };
 
   return (
     <div className="min-w-0 space-y-3">
@@ -1796,124 +1793,216 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
         <Card className="p-3">
           <div className="text-sm font-medium text-neutral-700">Contact</div>
           <div className="mt-2">
-            <LabelRow icon={<Mail className="h-3.5 w-3.5" />} label="Email" value={a.email ? <a className="underline" href={`mailto:${a.email}`}>{a.email}</a> : "-"} />
-            <LabelRow icon={<Phone className="h-3.5 w-3.5" />} label="Phone" value={a.phone || "-"} />
-            <LabelRow icon={<Globe className="h-3.5 w-3.5" />} label="Website" value={a.website ? <a className="break-all underline" href={a.website} target="_blank" rel="noreferrer">{a.website}</a> : "-"} />
+            <LabelRow 
+              icon={<Mail className="h-3.5 w-3.5" />} 
+              label="Email" 
+              value={a.email ? <a className="underline" href={`mailto:${a.email}`}>{a.email}</a> : formatValue(a.email)} 
+            />
+            <LabelRow 
+              icon={<Mail className="h-3.5 w-3.5" />} 
+              label="Alternate email" 
+              value={a.alternate_email ? <a className="underline" href={`mailto:${a.alternate_email}`}>{a.alternate_email}</a> : formatValue(a.alternate_email)} 
+            />
+            <LabelRow 
+              icon={<Phone className="h-3.5 w-3.5" />} 
+              label="Phone" 
+              value={formatValue(a.phone)} 
+            />
+            <LabelRow 
+              icon={<Phone className="h-3.5 w-3.5" />} 
+              label="Alternate phone" 
+              value={formatValue(a.alternate_phone)} 
+            />
+            <LabelRow 
+              icon={<Globe className="h-3.5 w-3.5" />} 
+              label="Website" 
+              value={a.website ? <a className="break-all underline" href={a.website} target="_blank" rel="noreferrer">{a.website}</a> : formatValue(a.website)} 
+            />
           </div>
         </Card>
-        {polledSuccess && (
-          <>
-            <Card className="p-3 md:col-span-2">
-              <div className="text-sm font-medium text-neutral-700">Socials</div>
-              <div className="mt-3 flex flex-wrap items-center gap-3">
-                {isUrl(a.linkedin_profile_url) && (
-                  <SocialPill href={a.linkedin_profile_url!} label="LinkedIn" kind="Personal" />
-                )}
-                {isUrl(a.instagram_profile_url) && (
-                  <SocialPill href={a.instagram_profile_url!} label="Instagram" kind="Personal" />
-                )}
-                {isUrl(a.facebook_profile_url) && (
-                  <SocialPill href={a.facebook_profile_url!} label="Facebook" kind="Personal" />
-                )}
-
-                {isUrl(a.company_linkedin_profile_url) && (
-                  <SocialPill href={a.company_linkedin_profile_url!} label="LinkedIn" kind="Company" />
-                )}
-                {isUrl(a.company_instagram_profile_url) && (
-                  <SocialPill href={a.company_instagram_profile_url!} label="Instagram" kind="Company" />
-                )}
-                {isUrl(a.company_facebook_profile_url) && (
-                  <SocialPill href={a.company_facebook_profile_url!} label="Facebook" kind="Company" />
-                )}
-
-                {!isUrl(a.linkedin_profile_url) &&
-                  !isUrl(a.instagram_profile_url) &&
-                  !isUrl(a.facebook_profile_url) &&
-                  !isUrl(a.company_linkedin_profile_url) &&
-                  !isUrl(a.company_instagram_profile_url) &&
-                  !isUrl(a.company_facebook_profile_url) && (
-                    <span className="text-sm text-neutral-400">No social profiles available.</span>
-                  )}
-              </div>
-            </Card>
-
-            {/* --- Company Bio (if present) --- */}
-            {(a.company_bio || a.bio) && (
-              <Card className="p-4">
-                <div className="text-sm font-medium text-neutral-700 mb-2">Company / Profile Bio</div>
-                <div className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
-                  {a.company_bio || a.bio}
-                </div>
-              </Card>
-            )}
-
-            {/* --- Registration (if present) --- */}
-            {(a.registration_number || a.registration_link) && (
-              <Card className="p-4">
-                <div className="text-sm font-medium text-neutral-700 mb-2">Registration</div>
-                <div className="text-sm text-neutral-700 space-y-1">
-                  {a.registration_number && (
-                    <div><span className="text-neutral-500">Number:</span> {a.registration_number}</div>
-                  )}
-                  {a.registration_link && (
-                    <div>
-                      <span className="text-neutral-500">Link:</span>{" "}
-                      <a href={a.registration_link} target="_blank" rel="noreferrer" className="underline break-all">{a.registration_link}</a>
-                    </div>
-                  )}
-                </div>
-              </Card>
-            )}
-
-            {/* --- Addresses (if present) --- */}
-            {(a.address || a.alternate_address || a.country || a.post_code || a.post_code_area) && (
-              <Card className="p-4">
-                <div className="text-sm font-medium text-neutral-700 mb-2">Addresses</div>
-                <div className="text-sm text-neutral-700 space-y-1">
-                  {a.address && (<div><span className="text-neutral-500">Primary:</span> {a.address}</div>)}
-                  {a.alternate_address && (<div><span className="text-neutral-500">Alternate:</span> {a.alternate_address}</div>)}
-                  <div className="flex flex-wrap gap-x-6 gap-y-1">
-                    {a.country && (<div><span className="text-neutral-500">Country:</span> {a.country}</div>)}
-                    {a.post_code && (<div><span className="text-neutral-500">Postcode:</span> {a.post_code}</div>)}
-                    {a.post_code_area && (<div><span className="text-neutral-500">Postcode Area:</span> {a.post_code_area}</div>)}
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {/* --- Notes (if present) --- */}
-            {a.notes && (
-              <Card className="p-4">
-                <div className="text-sm font-medium text-neutral-700 mb-2">Notes</div>
-                <div className="text-sm text-neutral-700 whitespace-pre-wrap">{a.notes}</div>
-              </Card>
-            )}
-
-            {/* --- Past Projects (if present) --- */}
-            {Array.isArray(a.past_projects) && a.past_projects.length > 0 && (
-              <Card className="p-4">
-                <div className="text-sm font-medium text-neutral-700 mb-2">Past Projects</div>
-                <ul className="list-disc pl-5 text-sm text-neutral-700 space-y-1">
-                  {a.past_projects.map((p, i) => (
-                    <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>
-                  ))}
-                </ul>
-              </Card>
-            )}
-
-            {/* --- Metadata (if present) --- */}
-            {(a.created_at || a.last_scraped) && (
-              <Card className="p-4">
-                <div className="text-sm font-medium text-neutral-700 mb-2">Metadata</div>
-                <div className="text-sm text-neutral-700 space-y-1">
-                  {a.created_at && (<div><span className="text-neutral-500">Created:</span> {new Date(a.created_at).toLocaleString()}</div>)}
-                  {a.last_scraped && (<div><span className="text-neutral-500">Last Scraped:</span> {new Date(a.last_scraped).toLocaleString()}</div>)}
-                </div>
-              </Card>
-            )}
-          </>
-        )}
       </div>
+
+      {/* Socials - Personal */}
+      <Card className="p-3">
+        <div className="text-sm font-medium text-neutral-700 mb-2">Socials – Personal</div>
+        <div className="mt-2">
+          <LabelRow 
+            icon={<LinkIcon className="h-3.5 w-3.5" />} 
+            label="LinkedIn" 
+            value={a.linkedin_profile_url && isUrl(a.linkedin_profile_url) ? (
+              <a className="break-all underline" href={a.linkedin_profile_url} target="_blank" rel="noreferrer">{a.linkedin_profile_url}</a>
+            ) : formatValue(a.linkedin_profile_url)} 
+          />
+          <LabelRow 
+            icon={<LinkIcon className="h-3.5 w-3.5" />} 
+            label="Instagram" 
+            value={a.instagram_profile_url && isUrl(a.instagram_profile_url) ? (
+              <a className="break-all underline" href={a.instagram_profile_url} target="_blank" rel="noreferrer">{a.instagram_profile_url}</a>
+            ) : formatValue(a.instagram_profile_url)} 
+          />
+          <LabelRow 
+            icon={<LinkIcon className="h-3.5 w-3.5" />} 
+            label="Facebook" 
+            value={a.facebook_profile_url && isUrl(a.facebook_profile_url) ? (
+              <a className="break-all underline" href={a.facebook_profile_url} target="_blank" rel="noreferrer">{a.facebook_profile_url}</a>
+            ) : formatValue(a.facebook_profile_url)} 
+          />
+        </div>
+      </Card>
+
+      {/* Socials - Company */}
+      <Card className="p-3">
+        <div className="text-sm font-medium text-neutral-700 mb-2">Socials – Company</div>
+        <div className="mt-2">
+          <LabelRow 
+            icon={<LinkIcon className="h-3.5 w-3.5" />} 
+            label="LinkedIn" 
+            value={a.company_linkedin_profile_url && isUrl(a.company_linkedin_profile_url) ? (
+              <a className="break-all underline" href={a.company_linkedin_profile_url} target="_blank" rel="noreferrer">{a.company_linkedin_profile_url}</a>
+            ) : formatValue(a.company_linkedin_profile_url)} 
+          />
+          <LabelRow 
+            icon={<LinkIcon className="h-3.5 w-3.5" />} 
+            label="Instagram" 
+            value={a.company_instagram_profile_url && isUrl(a.company_instagram_profile_url) ? (
+              <a className="break-all underline" href={a.company_instagram_profile_url} target="_blank" rel="noreferrer">{a.company_instagram_profile_url}</a>
+            ) : formatValue(a.company_instagram_profile_url)} 
+          />
+          <LabelRow 
+            icon={<LinkIcon className="h-3.5 w-3.5" />} 
+            label="Facebook" 
+            value={a.company_facebook_profile_url && isUrl(a.company_facebook_profile_url) ? (
+              <a className="break-all underline" href={a.company_facebook_profile_url} target="_blank" rel="noreferrer">{a.company_facebook_profile_url}</a>
+            ) : formatValue(a.company_facebook_profile_url)} 
+          />
+        </div>
+      </Card>
+
+      {/* Address */}
+      <Card className="p-3">
+        <div className="text-sm font-medium text-neutral-700 mb-2">Address</div>
+        <div className="mt-2">
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Address" 
+            value={formatValue(a.address)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Alternate address" 
+            value={formatValue(a.alternate_address)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Country" 
+            value={formatValue(a.country)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Post code" 
+            value={formatValue(a.post_code)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Post code area" 
+            value={formatValue(a.post_code_area)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Address line 1" 
+            value={formatValue(a.address_line_1)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Address line 2" 
+            value={formatValue(a.address_line2)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Address line 3" 
+            value={formatValue(a.address_line3)} 
+          />
+          <LabelRow 
+            icon={<MapPin className="h-3.5 w-3.5" />} 
+            label="Address line 4" 
+            value={formatValue(a.address_line_4)} 
+          />
+        </div>
+      </Card>
+
+      {/* Narrative */}
+      <Card className="p-4">
+        <div className="text-sm font-medium text-neutral-700 mb-2">Narrative</div>
+        <div className="mt-2">
+          <LabelRow 
+            icon={<User className="h-3.5 w-3.5" />} 
+            label="Architect bio" 
+            value={<span className="whitespace-pre-wrap">{formatValue(a.bio)}</span>} 
+          />
+          <LabelRow 
+            icon={<Building2 className="h-3.5 w-3.5" />} 
+            label="Company bio" 
+            value={<span className="whitespace-pre-wrap">{formatValue(a.company_bio)}</span>} 
+          />
+          <LabelRow 
+            icon={<User className="h-3.5 w-3.5" />} 
+            label="Notes" 
+            value={<span className="whitespace-pre-wrap">{formatValue(a.notes)}</span>} 
+          />
+        </div>
+      </Card>
+
+      {/* Registration */}
+      <Card className="p-3">
+        <div className="text-sm font-medium text-neutral-700 mb-2">Registration</div>
+        <div className="mt-2">
+          <LabelRow 
+            icon={<Building2 className="h-3.5 w-3.5" />} 
+            label="Registration number" 
+            value={formatValue(a.registration_number)} 
+          />
+          <LabelRow 
+            icon={<LinkIcon className="h-3.5 w-3.5" />} 
+            label="Registration link" 
+            value={a.registration_link && isUrl(a.registration_link) ? (
+              <a className="break-all underline" href={a.registration_link} target="_blank" rel="noreferrer">{a.registration_link}</a>
+            ) : formatValue(a.registration_link)} 
+          />
+        </div>
+      </Card>
+
+      {/* Past Projects */}
+      <Card className="p-3">
+        <div className="text-sm font-medium text-neutral-700 mb-2">Past Projects</div>
+        <div className="mt-2">
+          {Array.isArray(a.past_projects) && a.past_projects.length > 0 ? (
+            <ul className="list-disc pl-5 text-sm text-neutral-700 space-y-1">
+              {a.past_projects.map((p, i) => (
+                <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>
+              ))}
+            </ul>
+          ) : (
+            <span className="text-sm text-neutral-500">{formatValue(null)}</span>
+          )}
+        </div>
+      </Card>
+
+      {/* Meta */}
+      <Card className="p-3">
+        <div className="text-sm font-medium text-neutral-700 mb-2">Meta</div>
+        <div className="mt-2">
+          <LabelRow 
+            icon={<User className="h-3.5 w-3.5" />} 
+            label="Created at" 
+            value={a.created_at ? new Date(a.created_at).toLocaleString() : formatValue(a.created_at)} 
+          />
+          <LabelRow 
+            icon={<User className="h-3.5 w-3.5" />} 
+            label="Last scraped" 
+            value={a.last_scraped ? new Date(a.last_scraped).toLocaleString() : formatValue(a.last_scraped)} 
+          />
+        </div>
+      </Card>
     </div>
   );
 }
