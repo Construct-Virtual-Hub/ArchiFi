@@ -1421,12 +1421,14 @@ export default function ArchiFiUIFresh() {
           {!DEMO_MODE && (
             <Select id="jobType" name="jobType" value={jobType} onChange={setJobType} options={["All Job Types", "New Build", "Renovation", "Extension", "Interior Fit-Out"]} className="w-56" />
           )}
-          <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 px-3 py-2">
-            <span className="text-xs text-neutral-500">Value(m)</span>
-            <Input id="valueMin" name="valueMin" type="number" min={0} max={5} step="0.1" value={valueMin} onChange={(e) => setValueMin(Number(e.target.value))} className="h-8 w-20" />
-            <span className="text-neutral-400 select-none" aria-hidden="true">{'\u2013'}</span>
-            <Input id="valueMax" name="valueMax" type="number" min={0} max={5} step="0.1" value={valueMax} onChange={(e) => setValueMax(Number(e.target.value))} className="h-8 w-20" />
-          </div>
+          {false && (
+            <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 px-3 py-2">
+              <span className="text-xs text-neutral-500">Value(m)</span>
+              <Input id="valueMin" name="valueMin" type="number" min={0} max={5} step="0.1" value={valueMin} onChange={(e) => setValueMin(Number(e.target.value))} className="h-8 w-20" />
+              <span className="text-neutral-400 select-none" aria-hidden="true">{'\u2013'}</span>
+              <Input id="valueMax" name="valueMax" type="number" min={0} max={5} step="0.1" value={valueMax} onChange={(e) => setValueMax(Number(e.target.value))} className="h-8 w-20" />
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Btn variant="outline" onClick={clearDiscover}>Clear</Btn>
@@ -1515,11 +1517,6 @@ export default function ArchiFiUIFresh() {
                           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
                             <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{a.city} • {a.postcode}</span>
                             <span className="flex items-center gap-1"><Building2 className="h-3.5 w-3.5" />{a.company}</span>
-                          </div>
-                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-neutral-600 sm:grid-cols-3">
-                            <div className="flex items-center gap-1"><DollarSign className="h-3.5 w-3.5" />Value: {a.valueMillions}m</div>
-                            <div className="truncate">Specialty: {a.specialty}</div>
-                            <div className="truncate">Type: {a.projectType}</div>
                           </div>
                         </div>
                         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
