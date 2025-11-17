@@ -1,9 +1,10 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
-  "/page": "app/page.js",
+  "/login/page": "app/login/page.js",
+  "/api/scrape-status/route": "app/api/scrape-status/route.js",
   "/api/health/route": "app/api/health/route.js",
   "/api/architect-details/route": "app/api/architect-details/route.js",
-  "/api/scrape-status/route": "app/api/scrape-status/route.js",
   "/api/scrape/route": "app/api/scrape/route.js",
-  "/api/search/route": "app/api/search/route.js"
+  "/api/search/route": "app/api/search/route.js",
+  "/page": "app/page.js"
 }
