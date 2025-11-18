@@ -118,10 +118,10 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
     country: clean(d.country),
     post_code: clean(d.post_code),
     post_code_area: clean(d.post_code_area),
-    address_line_1: clean(d.address_line_1),
-    address_line2: clean(d.address_line2),
-    address_line3: clean(d.address_line3 ?? d.address_line_3),
-    address_line_4: clean(d.address_line_4),
+    address_line_1: clean(d.address_line_1 ?? d.address_line1),
+    address_line_2: clean(d.address_line_2 ?? d.address_line2),
+    address_line_3: clean(d.address_line_3 ?? d.address_line3),
+    address_line_4: clean(d.address_line_4 ?? d.address_line4),
 
     // socials (store raw links; UI already renders buttons)
     linkedin_profile_url: clean(d.linkedin_profile_url),
@@ -247,8 +247,8 @@ const MOCK_ENRICHED_BY_ID: Record<string, any> = {
     registration_link: "https://architects-register.org.uk/Architect/073200A?filterId=Architect",
     country: "United Kingdom",
     address_line_1: null,
-    address_line2: null,
-    address_line3: null,
+    address_line_2: null,
+    address_line_3: null,
     address_line_4: null,
     post_code_area: null,
     created_at: "2025-10-29T08:22:12.809977+00:00",
@@ -322,15 +322,15 @@ type Architect = {
   city: string;
   postcode: string;               // UI primary postcode
   company: string;
-  email?: string;
-  phone?: string;
-  website?: string;
+  email?: string | null;
+  phone?: string | null;
+  website?: string | null;
   socials?: { linkedin?: string; instagram?: string; facebook?: string };
   specialty?: string;
   projectType?: string;
   valueMillions?: number;
   grade?: string;
-  address?: string;               // keep ONLY ONE 'address' key
+  address?: string | null;               // keep ONLY ONE 'address' key
 
   // system fields
   raw?: any;
@@ -343,8 +343,8 @@ type Architect = {
 
   // SCRAPE-ONLY (optional) — names do NOT collide with base keys
   // identity
-  full_name?: string;
-  company_name?: string;
+  full_name?: string | null;
+  company_name?: string | null;
 
   // personal socials (do not replace 'socials' object)
   linkedin_profile_url?: string | null;
@@ -357,32 +357,32 @@ type Architect = {
   company_facebook_profile_url?: string | null;
 
   // narrative
-  company_bio?: string;
-  notes?: string;
-  bio?: string;
+  company_bio?: string | null;
+  notes?: string | null;
+  bio?: string | null;
 
   // addresses / geo hints
-  alternate_address?: string;
-  country?: string;
-  post_code?: string;             // raw scraped field (kept separate from UI 'postcode')
-  post_code_area?: string;
-  address_line_1?: string;
-  address_line2?: string;
-  address_line3?: string;
-  address_line_4?: string;
+  alternate_address?: string | null;
+  country?: string | null;
+  post_code?: string | null;             // raw scraped field (kept separate from UI 'postcode')
+  post_code_area?: string | null;
+  address_line_1?: string | null;
+  address_line_2?: string | null;
+  address_line_3?: string | null;
+  address_line_4?: string | null;
 
   // alternates
-  alternate_phone?: string;
-  alternate_email?: string;
+  alternate_phone?: string | null;
+  alternate_email?: string | null;
 
   // registry
-  registration_number?: string;
-  registration_link?: string;
+  registration_number?: string | null;
+  registration_link?: string | null;
 
   // arrays / timestamps
-  past_projects?: any[];
-  created_at?: string;
-  last_scraped?: string;
+  past_projects?: any[] | null;
+  created_at?: string | null;
+  last_scraped?: string | null;
 };
 
 function makeMock(n = 24): Architect[] {
@@ -1912,12 +1912,12 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
           <LabelRow 
             icon={<MapPin className="h-3.5 w-3.5" />} 
             label="Address line 2" 
-            value={formatValue(a.address_line2)} 
+            value={formatValue(a.address_line_2)} 
           />
           <LabelRow 
             icon={<MapPin className="h-3.5 w-3.5" />} 
             label="Address line 3" 
-            value={formatValue(a.address_line3)} 
+            value={formatValue(a.address_line_3)} 
           />
           <LabelRow 
             icon={<MapPin className="h-3.5 w-3.5" />} 
