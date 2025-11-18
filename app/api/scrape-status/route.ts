@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 // NEW: full upstream endpoint that expects ?session=...
 const UPSTREAM_SCRAPE_STATUS =
   process.env.UPSTREAM_SCRAPE_STATUS ||
-  "https://7a4d4f14fd68.ngrok-free.app/webhook-test/50546cbf-1229-4f96-a8a8-27ed62c0381e";
+  "https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",

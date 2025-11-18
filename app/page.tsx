@@ -154,11 +154,11 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
 
 // --- Outreach endpoints ---
 const OUTREACH_POST =
-  "https://7a4d4f14fd68.ngrok-free.app/webhook-test/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd";
+  "https://7a4d4f14fd68.ngrok-free.app/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd";
 const OUTREACH_STATUS_BASE =
-  "https://7a4d4f14fd68.ngrok-free.app/webhook-test/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
+  "https://7a4d4f14fd68.ngrok-free.app/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
 const GET_ARCHITECT_DETAILS =
-  "https://7a4d4f14fd68.ngrok-free.app/webhook-test/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
+  "https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
