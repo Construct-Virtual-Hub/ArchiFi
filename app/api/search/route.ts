@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic"; // no cache
 
 const UPSTREAM =
   process.env.UPSTREAM_SEARCH ??
-  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
+  "https://7a4d4f14fd68.ngrok-free.app/webhook-test/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",

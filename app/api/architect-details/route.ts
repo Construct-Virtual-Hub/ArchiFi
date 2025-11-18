@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 const DETAILS_BASE =
-  process.env.UPSTREAM_ARCHITECT_DETAILS_BASE || ""; // e.g. https://.../webhook/architect?id=
+  process.env.UPSTREAM_ARCHITECT_DETAILS_BASE ||
+  "https://7a4d4f14fd68.ngrok-free.app/webhook-test/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5?id="; // e.g. https://.../webhook/architect?id=
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
