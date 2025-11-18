@@ -1,7 +1,7 @@
 // app/api/scrape-status/route.ts
 export const dynamic = "force-dynamic";
 
-// NEW: full upstream endpoint that expects ?session=...
+// Upstream endpoint now expects POST requests; keep ?session=... (query) and include JSON body.
 const UPSTREAM_SCRAPE_STATUS =
   process.env.UPSTREAM_SCRAPE_STATUS ||
   "https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e";
@@ -29,7 +29,13 @@ export async function GET(req: Request) {
     }
 
     const upstreamURL = `${UPSTREAM_SCRAPE_STATUS}?session=${encodeURIComponent(session)}`;
-    const upstream = await fetch(upstreamURL, { cache: "no-store", next: { revalidate: 0 } });
+    const upstream = await fetch(upstreamURL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, session_id: session }),
+      cache: "no-store",
+      next: { revalidate: 0 },
+    });
     const text = await upstream.text();
     const type = upstream.headers.get("content-type") ?? "application/json; charset=utf-8";
     return new Response(text, { status: upstream.status, headers: { ...CORS, "Content-Type": type } });
