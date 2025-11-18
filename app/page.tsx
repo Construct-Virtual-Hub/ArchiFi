@@ -452,15 +452,33 @@ const DETAILS_ENDPOINT = "/api/architect-details"; // optional; will no-op if 50
 // Backend responds with enriched records for completed ones.
 async function fetchScrapedDetailsByIds(ids: string[]): Promise<any[]> {
   if (!ids?.length) return [];
-  const res = await fetch(SCRAPE_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(ids.map(id => ({ id: Number(id) }))),
-  });
-  if (!res.ok) return [];
-  const data = await res.json().catch(() => null);
-  if (!data) return [];
-  return Array.isArray(data) ? data : [data];
+
+  const results: any[] = [];
+
+  for (const rawId of ids) {
+    let numericId = Number(rawId);
+    if (!Number.isFinite(numericId)) {
+      const digits = String(rawId ?? "").replace(/[^\d]/g, "");
+      numericId = digits ? Number(digits) : NaN;
+    }
+    if (!Number.isFinite(numericId)) continue;
+
+    try {
+      const res = await fetch(GET_ARCHITECT_DETAILS, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ architect_id: numericId }),
+      });
+      if (!res.ok) continue;
+      const obj = await res.json().catch(() => null);
+      if (!obj) continue;
+      results.push(obj);
+    } catch {
+      // swallow and continue with other ids
+    }
+  }
+
+  return results;
 }
 
 async function fetchArchitectDetailsById(architectId: number) {
