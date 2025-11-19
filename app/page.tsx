@@ -383,6 +383,9 @@ type Architect = {
   past_projects?: any[] | null;
   created_at?: string | null;
   last_scraped?: string | null;
+
+  // full raw payload from the latest scrape/details call for this architect
+  scraped?: any;
 };
 
 function makeMock(n = 24): Architect[] {
@@ -1322,26 +1325,45 @@ export default function ArchiFiUIFresh() {
         if (newlySuccessfulIds.length) {
           const uniqueSuccessIds = Array.from(new Set(newlySuccessfulIds));
           fetchScrapedDetailsByIds(uniqueSuccessIds)
-            .then(details => {
-              if (!details?.length) return;
-              const patches = details.map(d => mapScrapeToPatch(d)).filter(Boolean);
-              if (!patches.length) return;
+            .then(detailsArray => {
+              if (!detailsArray?.length) return;
 
-              setReview(curr => {
-                const byId = new Map(
-                  patches
-                    .filter((p): p is Partial<Architect> & { id?: string | number } => !!p)
-                    .map(p => [String((p as any).id ?? ""), p])
-                );
-                if (!byId.size) return curr;
+              setReview(curr =>
+                curr.map(card => {
+                  const cardId = String(card.id);
+                  const match = detailsArray.find(d => {
+                    const srcId = String(d.architect_id ?? d.id ?? "");
+                    return srcId && srcId === cardId;
+                  });
 
-                return curr.map(card => {
-                  const patch = byId.get(String(card.id));
-                  return patch ? deepMergeArchitect(card, patch) : card;
-                });
-              });
+                  if (!match) return card;
+
+                  const src = match ?? {};
+                  const name = src.full_name || src.name || card.name;
+                  const company = src.company_name || src.company || card.company;
+                  const email = src.email ?? card.email;
+                  const phone = src.phone ?? card.phone;
+                  const website = src.website ?? card.website;
+
+                  return {
+                    ...card,
+                    name,
+                    company,
+                    email,
+                    phone,
+                    website,
+                    scraped: src,
+                    scrape: {
+                      ...(card.scrape ?? {}),
+                      status: "success",
+                    },
+                  };
+                })
+              );
             })
-            .catch(() => {});
+            .catch(() => {
+              // swallow; status will still be reflected from polling
+            });
         }
 
         const allTerminal = snapshot
@@ -1409,14 +1431,33 @@ export default function ArchiFiUIFresh() {
     setDetailsLoading(true);
     try {
       const fresh = await fetchArchitectDetailsById(numericId);
-      const patch = mapScrapeToPatch(fresh);
-      if (patch) {
-        setReview((prev) =>
-          prev.map((card) =>
-            String(card.id) === selectionKey ? deepMergeArchitect(card, patch) : card
-          )
-        );
-      }
+      const src = fresh ?? {};
+      // Prefer scraped values where available, keep old ones as fallback.
+      const name = src.full_name || src.name || arch.name;
+      const company = src.company_name || src.company || arch.company;
+      const email = src.email ?? arch.email;
+      const phone = src.phone ?? arch.phone;
+      const website = src.website ?? arch.website;
+
+      setReview((prev) =>
+        prev.map((card) => {
+          if (String(card.id) !== selectionKey) return card;
+          return {
+            ...card,
+            name,
+            company,
+            email,
+            phone,
+            website,
+            scraped: src,
+            scrape: {
+              ...(card.scrape ?? {}),
+              // We're looking at details; if we have them, treat as at least "success"
+              status: card.scrape?.status ?? "success",
+            },
+          };
+        })
+      );
     } catch (error) {
       console.warn("Failed to refresh architect details", error);
     } finally {
@@ -1781,7 +1822,9 @@ const LabelRow: React.FC<{ icon?: React.ReactNode; label: string; value?: React.
 );
 
 function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
-  const isUrl = (s?: string | null) => !!s && typeof s === "string" && /^https?:\/\//i.test(s);
+  const src = (a.scraped ?? {}) as any; // primary source: latest scrape payload
+  const isUrl = (s?: string | null) =>
+    !!s && typeof s === "string" && /^https?:\/\//i.test(s);
 
   const formatValue = (value: string | null | undefined): string => {
     return value ?? "";
@@ -1792,15 +1835,31 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       {loading ? (
         <div className="text-xs text-neutral-500">Refreshing details…</div>
       ) : null}
-      <div className="text-base font-semibold text-neutral-900">{a.name}</div>
-      <div className="text-sm text-neutral-600">{a.company}</div>
+      <div className="text-base font-semibold text-neutral-900">
+        {src.full_name || src.name || a.name}
+      </div>
+      <div className="text-sm text-neutral-600">
+        {src.company_name || src.company || a.company}
+      </div>
       <Divider />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card className="p-3">
           <div className="text-sm font-medium text-neutral-700">Essentials</div>
           <div className="mt-2">
-            <LabelRow icon={<MapPin className="h-3.5 w-3.5" />} label="Location" value={`${a.city} • ${a.postcode}`} />
-            <LabelRow icon={<DollarSign className="h-3.5 w-3.5" />} label="Project Value" value={`${a.valueMillions}m`} />
+            <LabelRow
+              icon={<MapPin className="h-3.5 w-3.5" />}
+              label="Location"
+              value={`${formatValue(src.city ?? a.city)} • ${formatValue(src.post_code ?? src.postcode ?? a.postcode)}`}
+            />
+            <LabelRow
+              icon={<DollarSign className="h-3.5 w-3.5" />}
+              label="Project Value"
+              value={formatValue(
+                src.valueMillions != null ? `${src.valueMillions}m` :
+                a.valueMillions != null ? `${a.valueMillions}m` :
+                ""
+              )}
+            />
             <LabelRow icon={<User className="h-3.5 w-3.5" />} label="Specialty" value={a.specialty} />
             <LabelRow icon={<Building2 className="h-3.5 w-3.5" />} label="Project Type" value={a.projectType} />
           </div>
@@ -1808,30 +1867,46 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
         <Card className="p-3">
           <div className="text-sm font-medium text-neutral-700">Contact</div>
           <div className="mt-2">
-            <LabelRow 
-              icon={<Mail className="h-3.5 w-3.5" />} 
-              label="Email" 
-              value={a.email ? <a className="underline" href={`mailto:${a.email}`}>{a.email}</a> : formatValue(a.email)} 
+            <LabelRow
+              icon={<Mail className="h-3.5 w-3.5" />}
+              label="Email"
+              value={
+                src.email
+                  ? <a className="underline" href={`mailto:${src.email}`}>{src.email}</a>
+                  : a.email
+                    ? <a className="underline" href={`mailto:${a.email}`}>{a.email}</a>
+                    : formatValue(src.email ?? a.email)
+              }
             />
-            <LabelRow 
-              icon={<Mail className="h-3.5 w-3.5" />} 
-              label="Alternate email" 
-              value={a.alternate_email ? <a className="underline" href={`mailto:${a.alternate_email}`}>{a.alternate_email}</a> : formatValue(a.alternate_email)} 
+            <LabelRow
+              icon={<Mail className="h-3.5 w-3.5" />}
+              label="Alternate email"
+              value={
+                src.alternate_email
+                  ? <a className="underline" href={`mailto:${src.alternate_email}`}>{src.alternate_email}</a>
+                  : formatValue(src.alternate_email ?? a.alternate_email)
+              }
             />
-            <LabelRow 
-              icon={<Phone className="h-3.5 w-3.5" />} 
-              label="Phone" 
-              value={formatValue(a.phone)} 
+            <LabelRow
+              icon={<Phone className="h-3.5 w-3.5" />}
+              label="Phone"
+              value={formatValue(src.phone ?? a.phone)}
             />
-            <LabelRow 
-              icon={<Phone className="h-3.5 w-3.5" />} 
-              label="Alternate phone" 
-              value={formatValue(a.alternate_phone)} 
+            <LabelRow
+              icon={<Phone className="h-3.5 w-3.5" />}
+              label="Alternate phone"
+              value={formatValue(src.alternate_phone ?? a.alternate_phone)}
             />
-            <LabelRow 
-              icon={<Globe className="h-3.5 w-3.5" />} 
-              label="Website" 
-              value={a.website ? <a className="break-all underline" href={a.website} target="_blank" rel="noreferrer">{a.website}</a> : formatValue(a.website)} 
+            <LabelRow
+              icon={<Globe className="h-3.5 w-3.5" />}
+              label="Website"
+              value={
+                (src.website && isUrl(src.website)) ? (
+                  <a className="break-all underline" href={src.website} target="_blank" rel="noreferrer">{src.website}</a>
+                ) : (a.website && isUrl(a.website)) ? (
+                  <a className="break-all underline" href={a.website} target="_blank" rel="noreferrer">{a.website}</a>
+                ) : formatValue(src.website ?? a.website)
+              }
             />
           </div>
         </Card>
@@ -1841,26 +1916,32 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       <Card className="p-3">
         <div className="text-sm font-medium text-neutral-700 mb-2">Socials – Personal</div>
         <div className="mt-2">
-          <LabelRow 
-            icon={<LinkIcon className="h-3.5 w-3.5" />} 
-            label="LinkedIn" 
-            value={a.linkedin_profile_url && isUrl(a.linkedin_profile_url) ? (
-              <a className="break-all underline" href={a.linkedin_profile_url} target="_blank" rel="noreferrer">{a.linkedin_profile_url}</a>
-            ) : formatValue(a.linkedin_profile_url)} 
+          <LabelRow
+            icon={<LinkIcon className="h-3.5 w-3.5" />}
+            label="LinkedIn"
+            value={
+              src.linkedin_profile_url && isUrl(src.linkedin_profile_url)
+                ? <a className="break-all underline" href={src.linkedin_profile_url} target="_blank" rel="noreferrer">{src.linkedin_profile_url}</a>
+                : formatValue(src.linkedin_profile_url)
+            }
           />
-          <LabelRow 
-            icon={<LinkIcon className="h-3.5 w-3.5" />} 
-            label="Instagram" 
-            value={a.instagram_profile_url && isUrl(a.instagram_profile_url) ? (
-              <a className="break-all underline" href={a.instagram_profile_url} target="_blank" rel="noreferrer">{a.instagram_profile_url}</a>
-            ) : formatValue(a.instagram_profile_url)} 
+          <LabelRow
+            icon={<LinkIcon className="h-3.5 w-3.5" />}
+            label="Instagram"
+            value={
+              src.instagram_profile_url && isUrl(src.instagram_profile_url)
+                ? <a className="break-all underline" href={src.instagram_profile_url} target="_blank" rel="noreferrer">{src.instagram_profile_url}</a>
+                : formatValue(src.instagram_profile_url)
+            }
           />
-          <LabelRow 
-            icon={<LinkIcon className="h-3.5 w-3.5" />} 
-            label="Facebook" 
-            value={a.facebook_profile_url && isUrl(a.facebook_profile_url) ? (
-              <a className="break-all underline" href={a.facebook_profile_url} target="_blank" rel="noreferrer">{a.facebook_profile_url}</a>
-            ) : formatValue(a.facebook_profile_url)} 
+          <LabelRow
+            icon={<LinkIcon className="h-3.5 w-3.5" />}
+            label="Facebook"
+            value={
+              src.facebook_profile_url && isUrl(src.facebook_profile_url)
+                ? <a className="break-all underline" href={src.facebook_profile_url} target="_blank" rel="noreferrer">{src.facebook_profile_url}</a>
+                : formatValue(src.facebook_profile_url)
+            }
           />
         </div>
       </Card>
@@ -1869,26 +1950,32 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       <Card className="p-3">
         <div className="text-sm font-medium text-neutral-700 mb-2">Socials – Company</div>
         <div className="mt-2">
-          <LabelRow 
-            icon={<LinkIcon className="h-3.5 w-3.5" />} 
-            label="LinkedIn" 
-            value={a.company_linkedin_profile_url && isUrl(a.company_linkedin_profile_url) ? (
-              <a className="break-all underline" href={a.company_linkedin_profile_url} target="_blank" rel="noreferrer">{a.company_linkedin_profile_url}</a>
-            ) : formatValue(a.company_linkedin_profile_url)} 
+          <LabelRow
+            icon={<LinkIcon className="h-3.5 w-3.5" />}
+            label="LinkedIn"
+            value={
+              src.company_linkedin_profile_url && isUrl(src.company_linkedin_profile_url)
+                ? <a className="break-all underline" href={src.company_linkedin_profile_url} target="_blank" rel="noreferrer">{src.company_linkedin_profile_url}</a>
+                : formatValue(src.company_linkedin_profile_url)
+            }
           />
-          <LabelRow 
-            icon={<LinkIcon className="h-3.5 w-3.5" />} 
-            label="Instagram" 
-            value={a.company_instagram_profile_url && isUrl(a.company_instagram_profile_url) ? (
-              <a className="break-all underline" href={a.company_instagram_profile_url} target="_blank" rel="noreferrer">{a.company_instagram_profile_url}</a>
-            ) : formatValue(a.company_instagram_profile_url)} 
+          <LabelRow
+            icon={<LinkIcon className="h-3.5 w-3.5" />}
+            label="Instagram"
+            value={
+              src.company_instagram_profile_url && isUrl(src.company_instagram_profile_url)
+                ? <a className="break-all underline" href={src.company_instagram_profile_url} target="_blank" rel="noreferrer">{src.company_instagram_profile_url}</a>
+                : formatValue(src.company_instagram_profile_url)
+            }
           />
-          <LabelRow 
-            icon={<LinkIcon className="h-3.5 w-3.5" />} 
-            label="Facebook" 
-            value={a.company_facebook_profile_url && isUrl(a.company_facebook_profile_url) ? (
-              <a className="break-all underline" href={a.company_facebook_profile_url} target="_blank" rel="noreferrer">{a.company_facebook_profile_url}</a>
-            ) : formatValue(a.company_facebook_profile_url)} 
+          <LabelRow
+            icon={<LinkIcon className="h-3.5 w-3.5" />}
+            label="Facebook"
+            value={
+              src.company_facebook_profile_url && isUrl(src.company_facebook_profile_url)
+                ? <a className="break-all underline" href={src.company_facebook_profile_url} target="_blank" rel="noreferrer">{src.company_facebook_profile_url}</a>
+                : formatValue(src.company_facebook_profile_url)
+            }
           />
         </div>
       </Card>
@@ -1897,50 +1984,50 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       <Card className="p-3">
         <div className="text-sm font-medium text-neutral-700 mb-2">Address</div>
         <div className="mt-2">
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Address" 
-            value={formatValue(a.address)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Address"
+            value={formatValue(src.address ?? a.address)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Alternate address" 
-            value={formatValue(a.alternate_address)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Alternate address"
+            value={formatValue(src.alternate_address ?? a.alternate_address)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Country" 
-            value={formatValue(a.country)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Country"
+            value={formatValue(src.country ?? a.country)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Post code" 
-            value={formatValue(a.post_code)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Post code"
+            value={formatValue(src.post_code ?? a.post_code)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Post code area" 
-            value={formatValue(a.post_code_area)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Post code area"
+            value={formatValue(src.post_code_area ?? a.post_code_area)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Address line 1" 
-            value={formatValue(a.address_line_1)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Address line 1"
+            value={formatValue(src.address_line_1 ?? a.address_line_1)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Address line 2" 
-            value={formatValue(a.address_line_2)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Address line 2"
+            value={formatValue(src.address_line_2 ?? a.address_line_2)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Address line 3" 
-            value={formatValue(a.address_line_3)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Address line 3"
+            value={formatValue(src.address_line_3 ?? a.address_line_3)}
           />
-          <LabelRow 
-            icon={<MapPin className="h-3.5 w-3.5" />} 
-            label="Address line 4" 
-            value={formatValue(a.address_line_4)} 
+          <LabelRow
+            icon={<MapPin className="h-3.5 w-3.5" />}
+            label="Address line 4"
+            value={formatValue(src.address_line_4 ?? a.address_line_4)}
           />
         </div>
       </Card>
@@ -1949,20 +2036,20 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       <Card className="p-4">
         <div className="text-sm font-medium text-neutral-700 mb-2">Narrative</div>
         <div className="mt-2">
-          <LabelRow 
-            icon={<User className="h-3.5 w-3.5" />} 
-            label="Architect bio" 
-            value={<span className="whitespace-pre-wrap">{formatValue(a.bio)}</span>} 
+          <LabelRow
+            icon={<User className="h-3.5 w-3.5" />}
+            label="Architect bio"
+            value={<span className="whitespace-pre-wrap">{formatValue(src.bio ?? a.bio)}</span>}
           />
-          <LabelRow 
-            icon={<Building2 className="h-3.5 w-3.5" />} 
-            label="Company bio" 
-            value={<span className="whitespace-pre-wrap">{formatValue(a.company_bio)}</span>} 
+          <LabelRow
+            icon={<Building2 className="h-3.5 w-3.5" />}
+            label="Company bio"
+            value={<span className="whitespace-pre-wrap">{formatValue(src.company_bio ?? a.company_bio)}</span>}
           />
-          <LabelRow 
-            icon={<User className="h-3.5 w-3.5" />} 
-            label="Notes" 
-            value={<span className="whitespace-pre-wrap">{formatValue(a.notes)}</span>} 
+          <LabelRow
+            icon={<User className="h-3.5 w-3.5" />}
+            label="Notes"
+            value={<span className="whitespace-pre-wrap">{formatValue(src.notes ?? a.notes)}</span>}
           />
         </div>
       </Card>
@@ -1971,17 +2058,19 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       <Card className="p-3">
         <div className="text-sm font-medium text-neutral-700 mb-2">Registration</div>
         <div className="mt-2">
-          <LabelRow 
-            icon={<Building2 className="h-3.5 w-3.5" />} 
-            label="Registration number" 
-            value={formatValue(a.registration_number)} 
+          <LabelRow
+            icon={<Building2 className="h-3.5 w-3.5" />}
+            label="Registration number"
+            value={formatValue(src.registration_number ?? a.registration_number)}
           />
-          <LabelRow 
-            icon={<LinkIcon className="h-3.5 w-3.5" />} 
-            label="Registration link" 
-            value={a.registration_link && isUrl(a.registration_link) ? (
-              <a className="break-all underline" href={a.registration_link} target="_blank" rel="noreferrer">{a.registration_link}</a>
-            ) : formatValue(a.registration_link)} 
+          <LabelRow
+            icon={<LinkIcon className="h-3.5 w-3.5" />}
+            label="Registration link"
+            value={
+              src.registration_link && isUrl(src.registration_link)
+                ? <a className="break-all underline" href={src.registration_link} target="_blank" rel="noreferrer">{src.registration_link}</a>
+                : formatValue(src.registration_link ?? a.registration_link)
+            }
           />
         </div>
       </Card>
@@ -1990,9 +2079,9 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       <Card className="p-3">
         <div className="text-sm font-medium text-neutral-700 mb-2">Past Projects</div>
         <div className="mt-2">
-          {Array.isArray(a.past_projects) && a.past_projects.length > 0 ? (
+          {Array.isArray(src.past_projects) && src.past_projects.length > 0 ? (
             <ul className="list-disc pl-5 text-sm text-neutral-700 space-y-1">
-              {a.past_projects.map((p, i) => (
+              {src.past_projects.map((p: any, i: number) => (
                 <li key={i}>{typeof p === "string" ? p : JSON.stringify(p)}</li>
               ))}
             </ul>
@@ -2006,15 +2095,27 @@ function ArchiDetails({ a, loading }: { a: Architect; loading?: boolean }) {
       <Card className="p-3">
         <div className="text-sm font-medium text-neutral-700 mb-2">Meta</div>
         <div className="mt-2">
-          <LabelRow 
-            icon={<User className="h-3.5 w-3.5" />} 
-            label="Created at" 
-            value={a.created_at ? new Date(a.created_at).toLocaleString() : formatValue(a.created_at)} 
+          <LabelRow
+            icon={<User className="h-3.5 w-3.5" />}
+            label="Created at"
+            value={
+              src.created_at
+                ? new Date(src.created_at).toLocaleString()
+                : a.created_at
+                  ? new Date(a.created_at).toLocaleString()
+                  : formatValue(src.created_at ?? a.created_at)
+            }
           />
-          <LabelRow 
-            icon={<User className="h-3.5 w-3.5" />} 
-            label="Last scraped" 
-            value={a.last_scraped ? new Date(a.last_scraped).toLocaleString() : formatValue(a.last_scraped)} 
+          <LabelRow
+            icon={<User className="h-3.5 w-3.5" />}
+            label="Last scraped"
+            value={
+              src.last_scraped
+                ? new Date(src.last_scraped).toLocaleString()
+                : a.last_scraped
+                  ? new Date(a.last_scraped).toLocaleString()
+                  : formatValue(src.last_scraped ?? a.last_scraped)
+            }
           />
         </div>
       </Card>
