@@ -96,8 +96,12 @@ function patchFromScrape(d: any): Partial<Architect> | null {
 }
 
 function mapScrapeToPatch(d: any): Partial<Architect> | null {
-  if (!d || typeof d !== "object") return null;
+  if (!d || typeof d !== "object") {
+    console.log("mapScrapeToPatch: Invalid data", d);
+    return null;
+  }
 
+  console.log("mapScrapeToPatch: Processing data with keys:", Object.keys(d));
   const clean = (v: unknown): any => (typeof v === "string" ? v.trim() || undefined : v ?? undefined);
 
   const patch: Partial<Architect> = {
@@ -149,7 +153,14 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
 
   // strip undefined so we don't clobber existing non-empty fields
   Object.keys(patch).forEach(k => (patch as any)[k] === undefined && delete (patch as any)[k]);
-  return Object.keys(patch).length ? patch : null;
+  
+  // Check if we have any meaningful data besides 'raw'
+  const meaningfulKeys = Object.keys(patch).filter(k => k !== 'raw' && (patch as any)[k] !== undefined);
+  const finalPatch = meaningfulKeys.length > 0 ? patch : null;
+  console.log("mapScrapeToPatch: Final patch", finalPatch ? `with ${Object.keys(finalPatch).length} keys` : "is null", finalPatch ? Object.keys(finalPatch) : "");
+  console.log("mapScrapeToPatch: Meaningful keys:", meaningfulKeys);
+  
+  return finalPatch;
 }
 
 // --- Outreach endpoints ---
@@ -312,6 +323,39 @@ const MOCK_ENRICHED_BY_ID: Record<string, any> = {
     created_at: "2025-03-14T09:00:00.000Z",
     last_scraped: "2025-11-05T12:04:10.571+00:00",
     session: "session-scrape-1762344189346"
+  },
+  "124910": {
+    id: "124910",
+    full_name: "Pedro Ravasco Anjos",
+    company_name: "Asgard Controlled Environments",
+    email: null,
+    phone: null,
+    website: "https://asgardcleanrooms.com",
+    linkedin_profile_url: "https://uk.linkedin.com/in/pedro-ravasco-anjos-17a565117",
+    instagram_profile_url: "",
+    facebook_profile_url: "",
+    company_bio: "",
+    notes: "LinkedIn confirms association with Asgard Controlled Environments; extraction attempts on company site failed; only social/LinkedIn verified; low confidence; session: session-scrape-1761736803146",
+    post_code: null,
+    alternate_phone: "",
+    alternate_email: null,
+    bio: "",
+    past_projects: [],
+    address: "2nd Floor, Kingsley Hall, Bailey Lane, Manchester Airport, Manchester, - None -, M90 4AN",
+    alternate_address: "",
+    company_linkedin_profile_url: "https://uk.linkedin.com/company/asgard-controlled-environments",
+    company_instagram_profile_url: "",
+    company_facebook_profile_url: "",
+    registration_number: "085900A",
+    registration_link: "https://architects-register.org.uk/Architect/085900A?filterId=Architect",
+    country: "United Kingdom",
+    address_line_1: null,
+    address_line2: null,
+    address_line3: null,
+    address_line_4: null,
+    post_code_area: null,
+    created_at: "2025-10-29T08:22:12.809Z",
+    last_scraped: "2025-11-14T11:13:27.722Z"
   }
 };
 
@@ -1410,6 +1454,7 @@ export default function ArchiFiUIFresh() {
   }
 
   async function handleSelectReviewArchitect(arch: Architect) {
+    console.log("Selecting architect:", arch.name, "ID:", arch.id, "Raw ID:", arch.raw?.id);
     setDetailsId(arch.id);
     detailsIdRef.current = arch.id;
 
@@ -1420,7 +1465,10 @@ export default function ArchiFiUIFresh() {
       numericId = digits ? Number(digits) : NaN;
     }
 
+    console.log("Converted ID:", sourceId, "->", numericId);
+
     if (!Number.isFinite(numericId)) {
+      console.warn("Invalid numeric ID for architect:", arch.name, "sourceId:", sourceId);
       setDetailsLoading((current) =>
         detailsIdRef.current === arch.id ? false : current
       );
@@ -1430,36 +1478,74 @@ export default function ArchiFiUIFresh() {
     const selectionKey = String(arch.id);
     setDetailsLoading(true);
     try {
-      const fresh = await fetchArchitectDetailsById(numericId);
-      const src = fresh ?? {};
-      // Prefer scraped values where available, keep old ones as fallback.
-      const name = src.full_name || src.name || arch.name;
-      const company = src.company_name || src.company || arch.company;
-      const email = src.email ?? arch.email;
-      const phone = src.phone ?? arch.phone;
-      const website = src.website ?? arch.website;
+      console.log("Fetching details for architect ID:", numericId);
+      
+      let fresh = null;
+      let dataApplied = false;
+      
+      // Try primary API first
+      try {
+        const response = await fetchArchitectDetailsById(numericId);
+        // Handle both array and single object responses
+        fresh = Array.isArray(response) ? response[0] : response;
+        console.log("Backend response:", response);
+        console.log("Extracted data:", fresh);
+      } catch (apiError) {
+        console.warn("Primary API failed:", apiError);
+        
+        // Try mock data as fallback
+        const mockData = MOCK_ENRICHED_BY_ID[String(numericId)] || MOCK_ENRICHED_BY_ID[String(sourceId)];
+        if (mockData) {
+          fresh = mockData;
+          console.log("Using mock data:", fresh);
+        } else {
+          console.log("No mock data found for IDs:", numericId, sourceId);
+          console.log("Available mock IDs:", Object.keys(MOCK_ENRICHED_BY_ID));
+        }
+      }
+      
+      if (fresh) {
+        const src = fresh ?? {};
+        console.log("Processing fresh data:", src);
+        
+        // Prefer scraped values where available, keep old ones as fallback.
+        const name = src.full_name || src.name || arch.name;
+        const company = src.company_name || src.company || arch.company;
+        const email = src.email ?? arch.email;
+        const phone = src.phone ?? arch.phone;
+        const website = src.website ?? arch.website;
+        
+        console.log("Mapped values:", { name, company, email, phone, website });
 
-      setReview((prev) =>
-        prev.map((card) => {
-          if (String(card.id) !== selectionKey) return card;
-          return {
-            ...card,
-            name,
-            company,
-            email,
-            phone,
-            website,
-            scraped: src,
-            scrape: {
-              ...(card.scrape ?? {}),
-              // We're looking at details; if we have them, treat as at least "success"
-              status: card.scrape?.status ?? "success",
-            },
-          };
-        })
-      );
+        setReview((prev) =>
+          prev.map((card) => {
+            if (String(card.id) !== selectionKey) return card;
+            return {
+              ...card,
+              name,
+              company,
+              email,
+              phone,
+              website,
+              scraped: src,
+              scrape: {
+                ...(card.scrape ?? {}),
+                // We're looking at details; if we have them, treat as at least "success"
+                status: card.scrape?.status ?? "success",
+              },
+            };
+          })
+        );
+        dataApplied = true;
+        console.log("Successfully applied architect data");
+      }
+      
+      if (!dataApplied) {
+        console.warn("No valid data to apply for architect:", arch.name, "ID:", numericId);
+      }
+      
     } catch (error) {
-      console.warn("Failed to refresh architect details", error);
+      console.error("Failed to refresh architect details for", arch.name, ":", error);
     } finally {
       setDetailsLoading((current) =>
         detailsIdRef.current === selectionKey ? false : current

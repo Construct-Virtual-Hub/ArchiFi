@@ -1,4 +1,4 @@
-// File: C:\Users\Eric\archifi-1\app\api\scrape-status\route.ts
+// File: C:\Users\jarib\COPUS\archifi2\ArchiFi\app\api\scrape-status\route.ts
 import * as entry from '../../../../../app/api/scrape-status/route.js'
 import type { NextRequest } from 'next/server.js'
 
