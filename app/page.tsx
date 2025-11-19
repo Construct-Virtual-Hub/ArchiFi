@@ -68,6 +68,27 @@ const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className = "", 
 
 const Divider: React.FC = () => <div className="h-px w-full bg-neutral-200" />;
 
+// Helper function to check if an architect has been scraped
+function isArchitectScraped(architect: Architect): boolean {
+  // Check if architect has scraped data with a valid last_scraped timestamp
+  const lastScraped = architect.last_scraped || architect.scraped?.last_scraped || architect.raw?.last_scraped;
+  const isScraped = !!lastScraped && lastScraped !== null && lastScraped !== "";
+  
+  // Debug logging (remove this in production)
+  if (architect.name === "Pedro Ravasco Anjos" || architect.id === "124910") {
+    console.log("Checking scraped status for Pedro:", {
+      name: architect.name,
+      id: architect.id,
+      lastScraped,
+      isScraped,
+      raw: architect.raw,
+      scraped: architect.scraped
+    });
+  }
+  
+  return isScraped;
+}
+
 function patchFromScrape(d: any): Partial<Architect> | null {
   if (!d || typeof d !== "object") return null;
 
@@ -471,6 +492,8 @@ function makeMock(n = 24): Architect[] {
       projectType: p,
       valueMillions: Math.min(5, Math.max(0, Math.round(val))),
       grade: ["A", "B", "C"][i % 3],
+      // Add last_scraped for some architects to test the indicator (every 3rd architect)
+      last_scraped: i % 3 === 0 ? "2025-11-15T10:30:00.000Z" : undefined,
     } as Architect;
   });
 }
@@ -712,6 +735,7 @@ function mapApiItemToArchitect(x: ApiItem, i: number): Architect {
     valueMillions: Number.isFinite(x.valueMillions) ? Number(x.valueMillions) : 0,
     grade: x.grade ?? ["A", "B", "C"][i % 3],
     address, // NEW
+    last_scraped: x.last_scraped ?? undefined, // Add scraped timestamp for indicator
     raw: x,
     scrape: { status: "idle" },
   };
@@ -1653,30 +1677,42 @@ export default function ArchiFiUIFresh() {
                 </div>
               </div>
               <div className="grid h-[calc(72vh-56px)] auto-rows-min grid-cols-1 gap-2 overflow-y-auto p-3 md:grid-cols-2 overscroll-contain">
-                {visibleItems.map((a) => (
-                  <motion.div key={a.id} layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
-                    <Card className="p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                            <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{a.city} • {a.postcode}</span>
-                            <span className="flex items-center gap-1"><Building2 className="h-3.5 w-3.5" />{a.company}</span>
+                {visibleItems.map((a) => {
+                  const hasBeenScraped = isArchitectScraped(a);
+                  return (
+                    <motion.div key={a.id} layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
+                      <Card className="p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between">
+                              <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
+                              {/* Scraped Indicator */}
+                              {hasBeenScraped && (
+                                <div className="ml-2 flex items-center gap-1 rounded-full bg-green-100 px-2 py-1 text-xs text-green-700 shrink-0">
+                                  <div className="h-2 w-2 rounded-full bg-green-500"></div>
+                                  <span className="hidden sm:inline">Scraped</span>
+                                </div>
+                              )}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
+                              <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{a.city} • {a.postcode}</span>
+                              <span className="flex items-center gap-1"><Building2 className="h-3.5 w-3.5" />{a.company}</span>
+                            </div>
                           </div>
+                          <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
+                            <input
+                              type="checkbox"
+                              checked={!!discoverSelected[a.id]}
+                              onChange={() => toggleSelect(a.id)}
+                              className="h-4 w-4 rounded border-neutral-300 accent-neutral-900"
+                            />
+                            <span className="hidden sm:inline">Select</span>
+                          </label>
                         </div>
-                        <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
-                          <input
-                            type="checkbox"
-                            checked={!!discoverSelected[a.id]}
-                            onChange={() => toggleSelect(a.id)}
-                            className="h-4 w-4 rounded border-neutral-300 accent-neutral-900"
-                          />
-                          <span className="hidden sm:inline">Select</span>
-                        </label>
-                      </div>
-                    </Card>
-                  </motion.div>
-                ))}
+                      </Card>
+                    </motion.div>
+                  );
+                })}
                 {visibleItems.length === 0 && (
                   <div className="flex h-full items-center justify-center text-sm text-neutral-500">
                     Hit <span className="mx-1 rounded-md bg-neutral-900 px-2 py-0.5 text-white">Search</span> to load architects.
