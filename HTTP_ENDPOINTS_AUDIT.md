@@ -313,12 +313,13 @@
 
 ---
 
-### 14. POST External: `OUTREACH_POST`
+### 14. POST Internal proxy: `/api/outreach`
 
-- **Defined in:** `app/page.tsx:152-153`
+- **Defined in:** `app/api/outreach/route.ts`
 - **Used in:** `app/page.tsx:836` - `fetch(OUTREACH_POST, ...)`
-- **Purpose:** Submit outreach requests to upstream ngrok webhook
-- **URL:** `"https://7a4d4f14fd68.ngrok-free.app/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd"` (hardcoded)
+- **Purpose:** Submit outreach requests via Next.js API proxy
+- **URL (internal):** `"/api/outreach"`
+- **Upstream URL:** `process.env.UPSTREAM_OUTREACH ?? "https://7a4d4f14fd68.ngrok-free.app/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd"`
 - **Request body:**
   ```typescript
   {
@@ -354,17 +355,18 @@
   }
   ```
   - Client reads: `session` or `session_id` from first item if array
-- **Guards/env:** None (hardcoded URL)
-- **Notes:** Direct client-side call (not proxied through Next.js API)
+- **Guards/env:** `UPSTREAM_OUTREACH`
+- **Notes:** Browser hits same-origin route; server proxies to ngrok webhook
 
 ---
 
-### 15. GET External: `OUTREACH_STATUS_BASE{sessionId}`
+### 15. GET Internal proxy: `/api/outreach-status?session_id={sessionId}`
 
-- **Defined in:** `app/page.tsx:154-155`
+- **Defined in:** `app/api/outreach-status/route.ts`
 - **Used in:** `app/page.tsx:732` - `fetch(OUTREACH_STATUS_BASE + encodeURIComponent(sessionId))`
-- **Purpose:** Poll outreach status from upstream ngrok webhook
-- **URL:** `"https://7a4d4f14fd68.ngrok-free.app/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id="` (hardcoded)
+- **Purpose:** Poll outreach status via Next.js API proxy
+- **URL (internal):** `"/api/outreach-status?session_id="`
+- **Upstream URL:** `process.env.UPSTREAM_OUTREACH_STATUS ?? "https://7a4d4f14fd68.ngrok-free.app/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37"`
 - **Query params:** `session_id` (appended to base URL)
 - **Response shape:**
   ```typescript
@@ -386,11 +388,10 @@
     username?: string
   }>
   ```
-- **Guards/env:** None (hardcoded URL)
+- **Guards/env:** `UPSTREAM_OUTREACH_STATUS`
 - **Notes:**
-  - Direct client-side call (not proxied)
-  - Polled every 10 seconds (`OUTREACH_POLL_INTERVAL_MS = 10_000`)
-  - Stops polling when all cards reach terminal status (`success` or `failed`)
+  - Browser polls same-origin route every 10 seconds (`OUTREACH_POLL_INTERVAL_MS = 10_000`)
+  - Route forwards query to upstream and returns body unchanged
 
 ---
 
@@ -424,6 +425,8 @@
 | `UPSTREAM_SCRAPE` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"` | `app/api/scrape/route.ts:4` |
 | `UPSTREAM_SCRAPE_STATUS` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"` | `app/api/scrape-status/route.ts:6` |
 | `UPSTREAM_ARCHITECT_DETAILS_BASE` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5?id="` | `app/api/architect-details/route.ts:4` |
+| `UPSTREAM_OUTREACH` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd"` | `app/api/outreach/route.ts:5` |
+| `UPSTREAM_OUTREACH_STATUS` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37"` | `app/api/outreach-status/route.ts:5` |
 
 ---
 

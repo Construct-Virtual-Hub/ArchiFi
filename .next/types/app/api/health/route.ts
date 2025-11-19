@@ -1,8 +1,8 @@
-// File: C:\Users\jarib\COPUS\archifi2\ArchiFi\app\api\scrape-status\route.ts
-import * as entry from '../../../../../app/api/scrape-status/route.js'
+// File: C:\Users\Eric\ArchiFi-1\app\api\health\route.ts
+import * as entry from '../../../../../app/api/health/route.js'
 import type { NextRequest } from 'next/server.js'
 
-type TEntry = typeof import('../../../../../app/api/scrape-status/route.js')
+type TEntry = typeof import('../../../../../app/api/health/route.js')
 
 // Check that the entry is a valid entry
 checkFields<Diff<{
