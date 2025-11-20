@@ -247,7 +247,7 @@ type OutreachStatusItem = {
 };
 
 // map of sessionId -> setInterval id
-const OUTREACH_POLL_INTERVAL_MS = 10_000;
+const OUTREACH_POLL_INTERVAL_MS = 60_000;
 const OUTREACH_TERMINALS: OutreachTerminal[] = ["success", "failed"];
 
 // --- Enriched mock records keyed by id (fields mirror your scrape POST output) ---
@@ -1217,7 +1217,7 @@ export default function ArchiFiUIFresh() {
         });
       }));
 
-      // 2) begin polling every 10s for this session
+      // 2) begin polling every 60s for this session
       startScrapePolling(sessionId);
     } catch (e) {
       console.warn("scrape POST failed", e);
@@ -1449,7 +1449,7 @@ export default function ArchiFiUIFresh() {
     };
 
     void tick();
-    scrapeIntervalRef.current = window.setInterval(tick, 10_000);
+    scrapeIntervalRef.current = window.setInterval(tick, 60_000);
     activeScrapeSessionRef.current = sessionId;
   }
 
