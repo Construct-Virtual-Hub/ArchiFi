@@ -266,7 +266,7 @@
 - **Defined in:** `app/api/search/route.ts:4-6`
 - **Used in:** `app/api/search/route.ts:25` (proxied from `/api/search`)
 - **Purpose:** Upstream search webhook (ngrok)
-- **URL:** `process.env.UPSTREAM_SEARCH ?? "https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"`
+- **URL:** `process.env.UPSTREAM_SEARCH ?? "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"`
 - **Request body:** Same as `/api/search` (forwarded as-is)
 - **Response shape:** Upstream response (forwarded as-is)
 - **Guards/env:** `UPSTREAM_SEARCH`
@@ -279,7 +279,7 @@
 - **Defined in:** `app/api/scrape/route.ts:3-5`
 - **Used in:** `app/api/scrape/route.ts:21` (proxied from `/api/scrape`)
 - **Purpose:** Upstream scrape webhook (ngrok)
-- **URL:** `process.env.UPSTREAM_SCRAPE ?? "https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"`
+- **URL:** `process.env.UPSTREAM_SCRAPE ?? "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"`
 - **Request body:** Same as `/api/scrape` (forwarded as-is)
 - **Response shape:** Upstream response (forwarded as-is)
 - **Guards/env:** `UPSTREAM_SCRAPE`
@@ -292,7 +292,7 @@
 - **Defined in:** `app/api/scrape-status/route.ts:5-7`
 - **Used in:** `app/api/scrape-status/route.ts:31` (proxied from `/api/scrape-status`)
 - **Purpose:** Upstream scrape status webhook (ngrok)
-- **URL:** `process.env.UPSTREAM_SCRAPE_STATUS || "https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"`
+- **URL:** `process.env.UPSTREAM_SCRAPE_STATUS || "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/ff8fce62-6ea3-4344-99bc-0c0075dbc2ae"`
 - **Query params:** `session` (required)
 - **Response shape:** Array of status objects (forwarded as-is)
 - **Guards/env:** `UPSTREAM_SCRAPE_STATUS`
@@ -305,7 +305,7 @@
 - **Defined in:** `app/api/architect-details/route.ts:3-4`
 - **Used in:** `app/api/architect-details/route.ts:29` (proxied from `/api/architect-details`)
 - **Purpose:** Upstream architect details endpoint (optional)
-- **URL:** `process.env.UPSTREAM_ARCHITECT_DETAILS_BASE || "https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5?id="`
+- **URL:** `process.env.UPSTREAM_ARCHITECT_DETAILS_BASE || "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5?id="`
 - **Path:** `{DETAILS_BASE}{encodeURIComponent(id)}`
 - **Response shape:** Architect details object (forwarded as-is)
 - **Guards/env:** `UPSTREAM_ARCHITECT_DETAILS_BASE`
@@ -318,7 +318,7 @@
 - **Defined in:** `app/page.tsx:152-153`
 - **Used in:** `app/page.tsx:836` - `fetch(OUTREACH_POST, ...)`
 - **Purpose:** Submit outreach requests to upstream ngrok webhook
-- **URL:** `"https://7a4d4f14fd68.ngrok-free.app/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd"` (hardcoded)
+- **URL:** `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd"` (hardcoded)
 - **Request body:**
   ```typescript
   {
@@ -364,7 +364,7 @@
 - **Defined in:** `app/page.tsx:154-155`
 - **Used in:** `app/page.tsx:732` - `fetch(OUTREACH_STATUS_BASE + encodeURIComponent(sessionId))`
 - **Purpose:** Poll outreach status from upstream ngrok webhook
-- **URL:** `"https://7a4d4f14fd68.ngrok-free.app/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id="` (hardcoded)
+- **URL:** `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id="` (hardcoded)
 - **Query params:** `session_id` (appended to base URL)
 - **Response shape:**
   ```typescript
@@ -420,10 +420,10 @@
 
 | Variable | Default Value | Used In |
 |----------|---------------|---------|
-| `UPSTREAM_SEARCH` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"` | `app/api/search/route.ts:5` |
-| `UPSTREAM_SCRAPE` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"` | `app/api/scrape/route.ts:4` |
-| `UPSTREAM_SCRAPE_STATUS` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"` | `app/api/scrape-status/route.ts:6` |
-| `UPSTREAM_ARCHITECT_DETAILS_BASE` | `"https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5?id="` | `app/api/architect-details/route.ts:4` |
+| `UPSTREAM_SEARCH` | `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"` | `app/api/search/route.ts:5` |
+| `UPSTREAM_SCRAPE` | `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"` | `app/api/scrape/route.ts:4` |
+| `UPSTREAM_SCRAPE_STATUS` | `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/ff8fce62-6ea3-4344-99bc-0c0075dbc2ae"` | `app/api/scrape-status/route.ts:6` |
+| `UPSTREAM_ARCHITECT_DETAILS_BASE` | `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5?id="` | `app/api/architect-details/route.ts:4` |
 
 ---
 
