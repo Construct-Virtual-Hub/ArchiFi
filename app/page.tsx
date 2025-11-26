@@ -4,6 +4,7 @@ import React, { useMemo, useState, useEffect, useRef } from "react";
 import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon } from "lucide-react";
 import { motion } from "framer-motion";
 import AuthGate from "../components/AuthGate";
+import ClientDashboard from "../components/ClientDashboard";
 
 // --- DEMO FLAG ---
 // Toggle to true for demo-only UI changes (hide job filter, placeholder library).
@@ -797,7 +798,7 @@ export default function ArchiFiUIFresh() {
   const [discoverSelected, setDiscoverSelected] = useState<Record<string, boolean>>({});
   const [review, setReview] = useState<Architect[]>([]);
 
-  const [activeTab, setActiveTab] = useState<"discover" | "review" | "outreach">("discover");
+  const [activeTab, setActiveTab] = useState<"discover" | "review" | "outreach" | "dashboard">("discover");
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
 
@@ -1611,9 +1612,9 @@ export default function ArchiFiUIFresh() {
       {/* Content area */}
       <div className="mx-auto mt-4 grid max-w-[1400px] grid-cols-12 gap-4">
         {/* Left: Architect Library */}
-        <Card className="col-span-12 h-[72vh] overflow-hidden p-0 sm:col-span-3">
+        <Card className="col-span-12 h-[80vh] overflow-hidden p-0 sm:col-span-3">
           <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/90 px-4 py-3 font-medium text-neutral-700">Architect Library</div>
-          <div className="min-w-0 h-[calc(72vh-48px)] space-y-2 overflow-y-auto p-3 overscroll-contain">
+          <div className="min-w-0 h-[calc(80vh-48px)] space-y-2 overflow-y-auto p-3 overscroll-contain">
             {DEMO_MODE ? (
               <div className="space-y-3">
                 {["Coming soon", "Coming soon", "Coming soon"].map((label, i) => (
@@ -1654,11 +1655,12 @@ export default function ArchiFiUIFresh() {
             <Btn variant={activeTab === "discover" ? "solid" : "outline"} onClick={() => setActiveTab("discover")}>Discover</Btn>
             <Btn variant={activeTab === "review" ? "solid" : "outline"} onClick={() => setActiveTab("review")}>Review</Btn>
             <Btn variant={activeTab === "outreach" ? "solid" : "outline"} onClick={() => setActiveTab("outreach")}>Outreach</Btn>
+            <Btn variant={activeTab === "dashboard" ? "solid" : "outline"} onClick={() => setActiveTab("dashboard")}>Client Dashboard</Btn>
           </div>
 
           {/* DISCOVER */}
           {activeTab === "discover" && (
-            <Card className="h-[72vh] overflow-hidden">
+            <Card className="h-[75vh] overflow-hidden">
               <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3">
                 <div>
                   <div className="text-sm font-medium text-neutral-700">Search Results</div>
@@ -1676,7 +1678,7 @@ export default function ArchiFiUIFresh() {
                   </Btn>
                 </div>
               </div>
-              <div className="grid h-[calc(72vh-56px)] auto-rows-min grid-cols-1 gap-2 overflow-y-auto p-3 md:grid-cols-2 overscroll-contain">
+              <div className="grid h-[calc(75vh-56px)] auto-rows-min grid-cols-1 gap-2 overflow-y-auto p-3 md:grid-cols-2 overscroll-contain">
                 {visibleItems.map((a) => {
                   const hasBeenScraped = isArchitectScraped(a);
                   return (
@@ -1731,7 +1733,7 @@ export default function ArchiFiUIFresh() {
 
           {/* REVIEW */}
           {activeTab === "review" && (
-            <div className="grid h-[72vh] grid-cols-12 gap-4">
+            <div className="grid h-[75vh] grid-cols-12 gap-4">
               <Card className="col-span-12 h-full overflow-hidden p-0 lg:col-span-6">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-4 py-2">
                   <div className="flex items-center gap-2">
@@ -1760,7 +1762,7 @@ export default function ArchiFiUIFresh() {
                     }}>Approve to Outreach</Btn>
                   </div>
                 </div>
-                <div className="min-w-0 h-[calc(72vh-56px)] space-y-2 overflow-y-auto p-3 overscroll-contain">
+                <div className="min-w-0 h-[calc(75vh-56px)] space-y-2 overflow-y-auto p-3 overscroll-contain">
                   {review.map((a) => (
                     <Card key={a.id} onClick={() => void handleSelectReviewArchitect(a)} className={`cursor-pointer p-4 ${detailsId === a.id ? "ring-1 ring-neutral-800" : ""}`}>
                       <div className="flex items-start justify-between gap-3">
@@ -1833,7 +1835,7 @@ export default function ArchiFiUIFresh() {
 
           {/* OUTREACH */}
           {activeTab === "outreach" && (
-            <Card className="h-[72vh] overflow-hidden p-0">
+            <Card className="h-[75vh] overflow-hidden p-0">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-4 py-2">
                 <div className="flex items-center gap-2">
                   <div className="text-sm font-medium text-neutral-700">Outreach</div>
@@ -1863,7 +1865,7 @@ export default function ArchiFiUIFresh() {
                   </Btn>
                 </div>
               </div>
-              <div className="grid h-[calc(72vh-56px)] grid-cols-1 gap-3 overflow-y-auto p-3 md:grid-cols-2">
+              <div className="grid h-[calc(75vh-56px)] grid-cols-1 gap-3 overflow-y-auto p-3 md:grid-cols-2">
                 {outreach.map((a) => {
                   const currentPlatform = (a.outreachPlatform ?? "linkedin") as OutreachPlatform;
                   const currentPlatformLabel = outreachPlatformLabel(currentPlatform);
@@ -1924,6 +1926,12 @@ export default function ArchiFiUIFresh() {
                   <div className="col-span-full flex h-[40vh] items-center justify-center text-sm text-neutral-500">No approved architects. Approve from Review.</div>
                 )}
               </div>
+            </Card>
+          )}
+
+          {activeTab === "dashboard" && (
+            <Card className="h-[75vh] overflow-hidden p-0">
+              <ClientDashboard />
             </Card>
           )}
         </div>
