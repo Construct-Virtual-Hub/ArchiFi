@@ -308,7 +308,9 @@ function buildAggregations(records: OutreachRecord[]): AggregatedData {
       });
     } else {
       const row = profileMap.get(profileKey)!;
-      row.actionsTaken = Array.from(new Set([...row.actionsTaken, ...actionsTaken]));
+      // Combine arrays first, then create Set to avoid spread operator on Set
+      const combinedActions = row.actionsTaken.concat(Array.from(actionsTaken));
+      row.actionsTaken = Array.from(new Set(combinedActions));
       row.status = record.status ?? row.status;
       if (new Date(record.created_at).getTime() > new Date(row.lastAction).getTime()) {
         row.lastAction = record.created_at;
