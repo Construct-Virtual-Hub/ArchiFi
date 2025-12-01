@@ -627,7 +627,7 @@ export default function ClientDashboard({
             >
               <Select
                 value={filters.dateRange}
-                options={DASHBOARD_DATE_RANGES}
+                options={[...DASHBOARD_DATE_RANGES]}
                 onChange={(value) => updateFilter("dateRange", value as DateRangeValue)}
               />
             </FilterCard>
@@ -637,7 +637,7 @@ export default function ClientDashboard({
             >
               <Select
                 value={filters.platform}
-                options={DASHBOARD_PLATFORM_FILTERS}
+                options={[...DASHBOARD_PLATFORM_FILTERS]}
                 onChange={(value) => updateFilter("platform", value as PlatformFilterValue)}
               />
             </FilterCard>
@@ -647,7 +647,7 @@ export default function ClientDashboard({
             >
               <Select
                 value={filters.status}
-                options={DASHBOARD_STATUS_FILTERS}
+                options={[...DASHBOARD_STATUS_FILTERS]}
                 onChange={(value) => updateFilter("status", value as StatusFilterValue)}
               />
             </FilterCard>
