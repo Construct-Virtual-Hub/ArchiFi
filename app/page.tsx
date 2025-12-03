@@ -192,6 +192,8 @@ const OUTREACH_STATUS_BASE =
   "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
 const GET_ARCHITECT_DETAILS =
   "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
+const CRM_MIGRATE_ENDPOINT =
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/e992794a-99f0-44ca-a3bf-edc07aaca449";
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
@@ -453,6 +455,72 @@ type Architect = {
   // full raw payload from the latest scrape/details call for this architect
   scraped?: any;
 };
+
+type CrmArchitectPayload = {
+  id: number | string;
+  created_at: string | null;
+  full_name: string | null;
+  company_name: string | null;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  linkedin_profile_url: string | null;
+  instagram_profile_url: string | null;
+  facebook_profile_url: string | null;
+  company_bio: string | null;
+  notes: string | null;
+  post_code: string | null;
+  alternate_phone: string | null;
+  alternate_email: string | null;
+  bio: string | null;
+  past_projects: any[] | null;
+  address: string | null;
+  alternate_address: string | null;
+  company_linkedin_profile_url: string | null;
+  company_instagram_profile_url: string | null;
+  company_facebook_profile_url: string | null;
+  registration_number: string | null;
+  registration_link: string | null;
+  country: string | null;
+};
+
+function mapArchitectToCrmPayload(a: Architect): CrmArchitectPayload {
+  const numericId =
+    typeof a.raw?.id === "number" || typeof a.raw?.id === "string"
+      ? a.raw.id
+      : a.id;
+
+  return {
+    id: numericId,
+    created_at: (a as any).created_at ?? a.raw?.created_at ?? null,
+    full_name: a.full_name ?? a.name ?? null,
+    company_name: a.company_name ?? a.company ?? null,
+    email: a.email ?? a.alternate_email ?? null,
+    phone: a.phone ?? a.alternate_phone ?? null,
+    website: a.website ?? null,
+    linkedin_profile_url:
+      a.linkedin_profile_url ?? a.socials?.linkedin ?? null,
+    instagram_profile_url:
+      a.instagram_profile_url ?? a.socials?.instagram ?? null,
+    facebook_profile_url:
+      a.facebook_profile_url ?? a.socials?.facebook ?? null,
+    company_bio: a.company_bio ?? null,
+    notes: a.notes ?? null,
+    post_code: a.post_code ?? a.postcode ?? null,
+    alternate_phone: a.alternate_phone ?? null,
+    alternate_email: a.alternate_email ?? null,
+    bio: a.bio ?? null,
+    past_projects: (a.past_projects as any[] | null) ?? null,
+    address: a.address ?? null,
+    alternate_address: a.alternate_address ?? null,
+    company_linkedin_profile_url: a.company_linkedin_profile_url ?? null,
+    company_instagram_profile_url: a.company_instagram_profile_url ?? null,
+    company_facebook_profile_url: a.company_facebook_profile_url ?? null,
+    registration_number: a.registration_number ?? null,
+    registration_link: a.registration_link ?? null,
+    country: a.country ?? null,
+  };
+}
 
 function makeMock(n = 24): Architect[] {
   const towns = ["London","Manchester","Birmingham","Leeds","Glasgow","Bristol","Edinburgh"];
@@ -1843,6 +1911,38 @@ export default function ArchiFiUIFresh() {
                   <Btn variant="outline" className="h-8 px-3 py-1 text-xs rounded-xl" onClick={() => setOutreachSelected({})}>Clear Select</Btn>
                 </div>
                 <div className="flex items-center gap-2">
+                  <Btn
+                    variant="outline"
+                    className="h-8 px-3 py-1 text-xs rounded-xl"
+                    onClick={async () => {
+                      const chosen = outreach.filter((r) => outreachSelected[r.id]);
+                      if (!chosen.length) {
+                        return;
+                      }
+
+                      try {
+                        const body = {
+                          architects: chosen.map(mapArchitectToCrmPayload),
+                        };
+
+                        const res = await fetch(CRM_MIGRATE_ENDPOINT, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(body),
+                        });
+
+                        if (!res.ok) {
+                          console.error("CRM migrate failed:", res.status, res.statusText);
+                        } else {
+                          console.log("CRM migrate success");
+                        }
+                      } catch (err) {
+                        console.error("CRM migrate error:", err);
+                      }
+                    }}
+                  >
+                    Migrate to CRM
+                  </Btn>
                   <Btn variant="outline" className="h-8 px-3 py-1 text-xs rounded-xl" onClick={clearOutreach}>Clear Outreach</Btn>
                   <Btn
                     variant="outline"
