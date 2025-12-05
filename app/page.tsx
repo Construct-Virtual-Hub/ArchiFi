@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useRef } from "react";
-import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon } from "lucide-react";
-import { motion } from "framer-motion";
+import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon, X } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import AuthGate from "../components/AuthGate";
 import ClientDashboard from "../components/ClientDashboard";
 
@@ -66,6 +66,80 @@ const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className = "", 
     {children}
   </div>
 );
+
+const Modal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  title?: string;
+  children: React.ReactNode;
+}> = ({ isOpen, onClose, title, children }) => {
+  // Prevent body scroll when modal is open
+  React.useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [isOpen]);
+
+  // Handle escape key to close modal
+  React.useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="absolute inset-0 bg-black/50"
+            onClick={onClose}
+          />
+          {/* Modal Container */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="relative z-10 w-full max-w-2xl max-h-[85vh] mx-4 rounded-2xl bg-white shadow-xl overflow-hidden flex flex-col"
+          >
+            {/* Header with close button */}
+            <div className="flex items-center justify-between border-b border-neutral-200 px-6 py-4">
+              <h2 className="text-lg font-semibold text-neutral-800">
+                {title || "Details"}
+              </h2>
+              <button
+                onClick={onClose}
+                className="rounded-full p-2 hover:bg-neutral-100 transition-colors"
+                aria-label="Close modal"
+              >
+                <X className="h-5 w-5 text-neutral-500" />
+              </button>
+            </div>
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-6 overscroll-contain">
+              {children}
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+};
 
 const Divider: React.FC = () => <div className="h-px w-full bg-neutral-200" />;
 
@@ -874,6 +948,11 @@ export default function ArchiFiUIFresh() {
   const [outreachSelected, setOutreachSelected] = useState<Record<string, boolean>>({});
   const [outreach, setOutreach] = useState<Architect[]>([]);
 
+  // Discover modal state
+  const [discoverModalOpen, setDiscoverModalOpen] = useState(false);
+  const [discoverModalArchitect, setDiscoverModalArchitect] = useState<Architect | null>(null);
+  const [discoverModalLoading, setDiscoverModalLoading] = useState(false);
+
   const outreachTimersRef = useRef<Record<string, number>>({}); // session -> intervalId
 
   useEffect(() => {
@@ -1207,6 +1286,56 @@ export default function ArchiFiUIFresh() {
     setDiscoverSelected((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
+  async function handleDiscoverCardClick(architect: Architect) {
+    // Only open modal for scraped architects
+    if (!isArchitectScraped(architect)) return;
+
+    setDiscoverModalArchitect(architect);
+    setDiscoverModalOpen(true);
+    setDiscoverModalLoading(true);
+
+    try {
+      // Get numeric ID for API call
+      const sourceId = architect.raw?.id ?? architect.id;
+      let numericId = Number(sourceId);
+      if (!Number.isFinite(numericId)) {
+        const digits = String(sourceId ?? "").replace(/[^\d]/g, "");
+        numericId = digits ? Number(digits) : NaN;
+      }
+
+      if (Number.isFinite(numericId)) {
+        const fresh = await fetchArchitectDetailsById(numericId);
+        const details = Array.isArray(fresh) ? fresh[0] : fresh;
+
+        if (details) {
+          // Merge fresh details into architect object
+          setDiscoverModalArchitect(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              name: details.full_name || details.name || prev.name,
+              company: details.company_name || details.company || prev.company,
+              email: details.email ?? prev.email,
+              phone: details.phone ?? prev.phone,
+              website: details.website ?? prev.website,
+              scraped: details,
+            };
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch architect details:", error);
+    } finally {
+      setDiscoverModalLoading(false);
+    }
+  }
+
+  function closeDiscoverModal() {
+    setDiscoverModalOpen(false);
+    setDiscoverModalArchitect(null);
+    setDiscoverModalLoading(false);
+  }
+
   function selectAllOnPage() {
     const upd: Record<string, boolean> = { ...discoverSelected };
     const target = visibleItems; // use full server page (100) or client page (20) as appropriate
@@ -1530,6 +1659,7 @@ export default function ArchiFiUIFresh() {
     return () => {
       stopScrapePolling();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrapeSessionId]);
 
   function clearReview() {
@@ -1546,7 +1676,7 @@ export default function ArchiFiUIFresh() {
     setOutreachSelected({});
   }
 
-  async function handleSelectReviewArchitect(arch: Architect) {
+  const handleSelectReviewArchitect = async (arch: Architect) => {
     console.log("Selecting architect:", arch.name, "ID:", arch.id, "Raw ID:", arch.raw?.id);
     setDetailsId(arch.id);
     detailsIdRef.current = arch.id;
@@ -1627,7 +1757,7 @@ export default function ArchiFiUIFresh() {
                 status: card.scrape?.status ?? "success",
               },
             };
-          })
+          }),
         );
         dataApplied = true;
         console.log("Successfully applied architect data");
@@ -1644,7 +1774,7 @@ export default function ArchiFiUIFresh() {
         detailsIdRef.current === selectionKey ? false : current
       );
     }
-  }
+  };
 
   const pageContent = (
     <div className="min-h-[90vh] w-full min-w-0 overflow-hidden bg-neutral-50 p-4 sm:p-6">
@@ -1728,6 +1858,7 @@ export default function ArchiFiUIFresh() {
 
           {/* DISCOVER */}
           {activeTab === "discover" && (
+            <>
             <Card className="h-[75vh] overflow-hidden">
               <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3">
                 <div>
@@ -1751,7 +1882,10 @@ export default function ArchiFiUIFresh() {
                   const hasBeenScraped = isArchitectScraped(a);
                   return (
                     <motion.div key={a.id} layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}>
-                      <Card className="p-4">
+                      <Card 
+                        className={`p-4 ${hasBeenScraped ? 'cursor-pointer hover:border-neutral-400 hover:shadow-md transition-all' : ''}`}
+                        onClick={() => hasBeenScraped && handleDiscoverCardClick(a)}
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-start justify-between">
@@ -1768,8 +1902,15 @@ export default function ArchiFiUIFresh() {
                               <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{a.city} • {a.postcode}</span>
                               <span className="flex items-center gap-1"><Building2 className="h-3.5 w-3.5" />{a.company}</span>
                             </div>
+                            {/* Click hint for scraped cards */}
+                            {hasBeenScraped && (
+                              <div className="mt-2 text-xs text-green-600">Click to view details</div>
+                            )}
                           </div>
-                          <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700">
+                          <label 
+                            className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-neutral-700"
+                            onClick={(e) => e.stopPropagation()}
+                          >
                             <input
                               type="checkbox"
                               checked={!!discoverSelected[a.id]}
@@ -1797,6 +1938,20 @@ export default function ArchiFiUIFresh() {
                 </div>
               </div>
             </Card>
+
+            {/* Architect Details Modal for Discover Tab */}
+            <Modal
+              isOpen={discoverModalOpen}
+              onClose={closeDiscoverModal}
+              title="Architect Details"
+            >
+              {discoverModalArchitect ? (
+                <ArchiDetails a={discoverModalArchitect} loading={discoverModalLoading} />
+              ) : (
+                <div className="text-sm text-neutral-500">No architect selected</div>
+              )}
+            </Modal>
+            </>
           )}
 
           {/* REVIEW */}
