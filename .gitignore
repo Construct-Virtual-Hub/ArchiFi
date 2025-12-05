@@ -7,3 +7,12 @@ build
 .env*.local
 .DS_Store
 *.pem
+
+# Environment variables
+.env
+
+# Reports (keep structure, ignore content)
+reports/*.json
+reports/archive/
+!reports/.gitkeep
+!reports/archive/.gitkeep
