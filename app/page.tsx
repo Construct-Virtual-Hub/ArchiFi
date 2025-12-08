@@ -261,11 +261,11 @@ function mapScrapeToPatch(d: any): Partial<Architect> | null {
 
 // --- Outreach endpoints ---
 const OUTREACH_POST =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/97ee6a11-ebe3-4f87-a8d1-3487101ee1bd";
 const OUTREACH_STATUS_BASE =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/3c3c9a81-6786-4243-9c91-a803fba4da37?session_id=";
 const GET_ARCHITECT_DETAILS =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
 const CRM_MIGRATE_ENDPOINT =
   "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/e992794a-99f0-44ca-a3bf-edc07aaca449";
 

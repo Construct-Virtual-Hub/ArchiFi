@@ -35,31 +35,31 @@ export type {
 } from "../lib/client-dashboard/config";
 
 const ALL_CLIENTS_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/cv/clients/";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/cv/clients/";
 
 const OUTREACH_REPORT_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/all";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/all";
 
 const ACTION_SUCCESS_RATE_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/daily-success-metrics";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/daily-success-metrics";
 
 const CAMPAIGN_VELOCITY_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/get-campaign-velocity";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/get-campaign-velocity";
 
 const CLIENT_METRICS_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/client-metrics";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/client-metrics";
 
 const ENGAGEMENT_QUALITY_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/engagement-quality-score";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/engagement-quality-score";
 
 const EXECUTIVE_SUMMARY_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/executive-summary";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/executive-summary";
 
 const BREAKDOWN_BY_PLATFORM_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/break-by-platform";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/break-by-platform";
 
 const TIME_SERIES_ENDPOINT =
-  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/outreach/report/time-series";
+  "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/outreach/report/time-series";
 
 type OutreachAction = {
   item: string;
