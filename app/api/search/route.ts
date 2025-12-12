@@ -1,4 +1,6 @@
 // app/api/search/route.ts
+import { filterByRadius } from "../../../lib/geo/nominatim";
+
 export const dynamic = "force-dynamic"; // no cache
 
 const UPSTREAM =
@@ -19,13 +21,25 @@ export async function OPTIONS() {
 export async function POST(req: Request) {
   try {
     const payload = await req.json().catch(() => ({}));
+    
+    // Extract radius filtering params (optional)
+    const centerLat = typeof payload.lat === "number" ? payload.lat : null;
+    const centerLng = typeof payload.lng === "number" ? payload.lng : null;
+    const radiusKm = typeof payload.radius === "number" && payload.radius > 0 ? payload.radius : null;
+    
+    // Remove radius params from upstream payload (they're for our filtering only)
+    const upstreamPayload = { ...payload };
+    delete upstreamPayload.lat;
+    delete upstreamPayload.lng;
+    delete upstreamPayload.radius;
+    
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 20000);
 
     const upstreamRes = await fetch(UPSTREAM, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(upstreamPayload),
       signal: controller.signal,
       // Avoid Next caching
       cache: "no-store",
@@ -39,6 +53,35 @@ export async function POST(req: Request) {
     const contentType =
       upstreamRes.headers.get("content-type") ?? "application/json; charset=utf-8";
 
+    // If radius filtering is requested, parse and filter the response
+    if (centerLat !== null && centerLng !== null && radiusKm !== null) {
+      try {
+        const data = JSON.parse(text);
+        const items = Array.isArray(data) ? data : data.items ?? [];
+        
+        // Filter items by radius
+        const filtered = filterByRadius(items, centerLat, centerLng, radiusKm);
+        
+        // Return filtered results in the same format as upstream
+        const filteredData = Array.isArray(data)
+          ? filtered
+          : { ...data, items: filtered };
+        
+        return new Response(JSON.stringify(filteredData), {
+          status: upstreamRes.status,
+          headers: { "Content-Type": contentType, ...CORS },
+        });
+      } catch (parseError) {
+        // If parsing fails, return original response
+        console.error("Failed to parse upstream response for radius filtering:", parseError);
+        return new Response(text, {
+          status: upstreamRes.status,
+          headers: { "Content-Type": contentType, ...CORS },
+        });
+      }
+    }
+
+    // No radius filtering, return original response
     return new Response(text, {
       status: upstreamRes.status,
       headers: { "Content-Type": contentType, ...CORS },

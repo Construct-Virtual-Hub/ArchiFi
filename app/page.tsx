@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useMemo, useState, useEffect, useRef } from "react";
-import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon, X } from "lucide-react";
+import { Check, ChevronDown, Mail, MapPin, Phone, Search, User, Globe, Building2, DollarSign, Link as LinkIcon, X, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import AuthGate from "../components/AuthGate";
 import ClientDashboard from "../components/ClientDashboard";
+import { geocodeLocation, filterByRadius, calculateDistanceKm, type GeocodingResult } from "../lib/geo/nominatim";
 
 // --- DEMO FLAG ---
 // Toggle to true for demo-only UI changes (hide job filter, placeholder library).
@@ -60,6 +61,158 @@ const Select: React.FC<{ id?: string; name?: string; value: string; onChange: (v
     <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
   </div>
 );
+
+const RadiusSlider: React.FC<{ 
+  id?: string; 
+  name?: string; 
+  value: number | null; // null = "Any", 0-50 = km value
+  onChange: (v: number | null) => void; 
+  className?: string;
+}> = ({ id, name, value, onChange, className = "" }) => {
+  // Convert value to slider position: 
+  // - null = position 0 (Any)
+  // - 0-50 km = position 1-51 (slider value is km + 1)
+  // So we map: null -> 0, 0km -> 1, 1km -> 2, ..., 50km -> 51
+  const sliderValue = value === null ? 0 : value + 1;
+  const percentage = (sliderValue / 51) * 100;
+  
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const sliderPos = parseInt(e.target.value, 10);
+    // Position 0 = "Any" (null)
+    // Position 1-51 = 0-50 km (sliderPos - 1)
+    onChange(sliderPos === 0 ? null : sliderPos - 1);
+  };
+
+  const displayValue = value === null ? "Any" : `${value} km`;
+
+  return (
+    <div 
+      className={`relative h-10 rounded-2xl border border-neutral-300 bg-white px-3 flex items-center gap-2 select-none ${className}`}
+      onMouseDown={(e) => e.preventDefault()}
+      style={{ userSelect: 'none' } as React.CSSProperties}
+    >
+      <label htmlFor={id} className="text-[10px] font-medium text-neutral-500 uppercase tracking-wide whitespace-nowrap shrink-0 pointer-events-none">
+        Radius
+      </label>
+      <div className="relative flex-1 flex items-center gap-2 min-w-0">
+        <div className="relative flex-1 min-w-0">
+          {/* Background track with filled portion */}
+          <div 
+            className="absolute top-1/2 left-0 h-0.5 bg-neutral-900 rounded-full -translate-y-1/2 pointer-events-none transition-all duration-150"
+            style={{ width: `${percentage}%` }}
+          />
+          <div className="absolute top-1/2 left-0 w-full h-0.5 bg-neutral-200 rounded-full -translate-y-1/2 pointer-events-none" />
+          
+          {/* Slider input */}
+          <input
+            id={id}
+            name={name}
+            type="range"
+            min="0"
+            max="51"
+            value={sliderValue}
+            onChange={handleChange}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="radius-slider w-full h-4 relative z-10 cursor-pointer"
+          />
+        </div>
+        <span className="text-xs font-medium text-neutral-700 w-[50px] text-right whitespace-nowrap shrink-0 pointer-events-none">
+          {displayValue}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+const ScrollToggle: React.FC<{ 
+  id?: string; 
+  name?: string; 
+  value: string; 
+  onChange: (v: string) => void; 
+  options: string[]; 
+  className?: string;
+}> = ({ id, name, value, onChange, options, className = "" }) => {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  
+  // Scroll selected option into view on mount/value change
+  useEffect(() => {
+    if (scrollRef.current) {
+      const selectedButton = scrollRef.current.querySelector(`[data-value="${value}"]`) as HTMLElement;
+      if (selectedButton) {
+        selectedButton.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      }
+    }
+  }, [value]);
+
+  return (
+    <div 
+      id={id}
+      className={`flex items-center gap-2 overflow-x-auto radius-scrollbar ${className}`}
+      style={{ WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+      ref={scrollRef}
+    >
+      {options.map((opt) => {
+        const isSelected = value === opt;
+        return (
+          <button
+            key={opt}
+            type="button"
+            data-value={opt}
+            onClick={() => onChange(opt)}
+            className={`
+              shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition-all whitespace-nowrap
+              ${isSelected 
+                ? 'bg-neutral-900 text-white shadow-sm' 
+                : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+              }
+            `}
+          >
+            {opt === "Any" ? "Any" : `${opt} km`}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+const ClientSelect: React.FC<{ 
+  id?: string; 
+  name?: string; 
+  value: string; 
+  onChange: (v: string) => void; 
+  clients: Array<{ id: string; name: string }>; 
+  loading?: boolean;
+  className?: string 
+}> = ({ id, name, value, onChange, clients, loading = false, className = "" }) => {
+  const options = [
+    { value: "all", label: "All Clients" },
+    ...clients.map((c) => ({ value: c.id, label: c.name }))
+  ];
+  
+  return (
+    <div className={`relative ${className}`}>
+      <select
+        id={id}
+        name={name}
+        className="appearance-none h-10 w-full rounded-2xl border border-neutral-300 bg-white px-3 pr-8 text-sm text-neutral-800 focus:border-neutral-400"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={loading}
+      >
+        {loading ? (
+          <option value="all">Loading clients...</option>
+        ) : (
+          options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))
+        )}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
+    </div>
+  );
+};
 
 const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className = "", children, ...props }) => (
   <div className={`min-w-0 rounded-2xl border border-neutral-200 bg-white/90 shadow-sm ${className}`} {...props}>
@@ -948,6 +1101,26 @@ export default function ArchiFiUIFresh() {
   const [outreachSelected, setOutreachSelected] = useState<Record<string, boolean>>({});
   const [outreach, setOutreach] = useState<Architect[]>([]);
 
+  // Client filter state
+  const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string>("all");
+  const [clientsLoading, setClientsLoading] = useState(false);
+
+  // CRM migration tracking
+  const [crmMigratedIds, setCrmMigratedIds] = useState<Set<string>>(() => {
+    // Load from localStorage on init
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("archifi:crmMigratedIds");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    }
+    return new Set();
+  });
+
+  // Radius filter state
+  const [searchRadius, setSearchRadius] = useState<number | null>(null); // null = any
+  const [geocodedLocation, setGeocodedLocation] = useState<GeocodingResult | null>(null);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+
   // Discover modal state
   const [discoverModalOpen, setDiscoverModalOpen] = useState(false);
   const [discoverModalArchitect, setDiscoverModalArchitect] = useState<Architect | null>(null);
@@ -959,6 +1132,53 @@ export default function ArchiFiUIFresh() {
     return () => {
       Object.keys(outreachTimersRef.current).forEach(stopOutreachPolling);
     };
+  }, []);
+
+  // Load selected client from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("archifi:selectedClient");
+    if (saved) setSelectedClientId(saved);
+  }, []);
+
+  // Save selected client to localStorage
+  useEffect(() => {
+    localStorage.setItem("archifi:selectedClient", selectedClientId);
+  }, [selectedClientId]);
+
+  // Persist CRM migrated IDs to localStorage
+  useEffect(() => {
+    localStorage.setItem(
+      "archifi:crmMigratedIds", 
+      JSON.stringify(Array.from(crmMigratedIds))
+    );
+  }, [crmMigratedIds]);
+
+  // Fetch clients on mount
+  useEffect(() => {
+    async function fetchClients() {
+      setClientsLoading(true);
+      try {
+        const res = await fetch(
+          "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/cv/clients/",
+          { headers: { "ngrok-skip-browser-warning": "1" } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const clientList = Array.isArray(data) 
+            ? data.map((c: any) => ({ 
+                id: String(c.id || c.client_id || c.clientId || ""), 
+                name: c.name || c.client_name || c.business_name || `Client ${c.id || c.client_id || c.clientId || ""}`
+              })).filter((c: { id: string; name: string }) => c.id)
+            : [];
+          setClients(clientList);
+        }
+      } catch (err) {
+        console.error("Failed to fetch clients:", err);
+      } finally {
+        setClientsLoading(false);
+      }
+    }
+    fetchClients();
   }, []);
 
   function stopOutreachPolling(sessionId: string) {
@@ -1178,12 +1398,33 @@ export default function ArchiFiUIFresh() {
     try {
       setApiError(null);
       setApiLoading(true);
+      setGeocodedLocation(null);
       setApiPages([]);
       setApiNextIds([]);
       setApiPageIndex(0);
       setDiscover([]);
       setDiscoverSelected({});
       setPage(1);
+
+      let centerCoords: { lat: number; lng: number } | null = null;
+
+      // If we have a query and radius filter, geocode first
+      if (query && query.trim().length > 0 && searchRadius !== null) {
+        setIsGeocoding(true);
+        try {
+          const geoResult = await geocodeLocation(query.trim());
+          if (geoResult) {
+            setGeocodedLocation(geoResult);
+            centerCoords = { lat: geoResult.lat, lng: geoResult.lng };
+          } else {
+            console.warn("Geocoding failed, falling back to text search");
+          }
+        } catch (geoErr) {
+          console.warn("Geocoding failed, falling back to text search:", geoErr);
+        } finally {
+          setIsGeocoding(false);
+        }
+      }
 
       const payload =
         query && query.trim().length > 0
@@ -1198,7 +1439,26 @@ export default function ArchiFiUIFresh() {
       const mapped = rawItems.map(mapApiItemToArchitect);
 
       // Apply local UI filters (job type + value range + query guard)
-      const filtered = applyClientFilters(mapped, query, jobType, valueMin, valueMax);
+      let filtered = applyClientFilters(mapped, query, jobType, valueMin, valueMax);
+
+      // Apply radius filter if we have geocoded coordinates
+      if (centerCoords && searchRadius !== null) {
+        // Filter by radius, but include items without coordinates
+        filtered = filtered.filter(arch => {
+          // Extract coordinates from architect (may be in raw data or need geocoding)
+          const lat = (arch as any).lat ?? (arch as any).latitude ?? (arch.raw as any)?.lat ?? (arch.raw as any)?.latitude;
+          const lng = (arch as any).lng ?? (arch as any).longitude ?? (arch.raw as any)?.lng ?? (arch.raw as any)?.longitude;
+          
+          // If no coordinates, include the architect (can't determine distance)
+          if (lat == null || lng == null) {
+            return true;
+          }
+          
+          // Calculate distance and filter
+          const distance = calculateDistanceKm(centerCoords.lat, centerCoords.lng, lat, lng);
+          return distance <= searchRadius;
+        });
+      }
 
       const nextId = extractNextId(data, rawItems);
 
@@ -1208,7 +1468,7 @@ export default function ArchiFiUIFresh() {
       setDiscover(filtered);         // drive the Discover grid
       setActiveTab("discover");
 
-      console.log("Search loaded:", { count: filtered.length, nextId });
+      console.log("Search loaded:", { count: filtered.length, nextId, geocoded: !!centerCoords });
     } catch (e: any) {
       console.error("SEARCH failed; falling back to mock:", e?.message || e);
       setApiError("Online search failed. Showing mock results.");
@@ -1220,6 +1480,7 @@ export default function ArchiFiUIFresh() {
       setActiveTab("discover");
     } finally {
       setApiLoading(false);
+      setIsGeocoding(false);
     }
   }
 
@@ -1250,7 +1511,23 @@ export default function ArchiFiUIFresh() {
 
       const rawItems: ApiItem[] = Array.isArray(data) ? data : (data.items ?? []);
       const mapped = rawItems.map(mapApiItemToArchitect);
-      const filtered = applyClientFilters(mapped, query, jobType, valueMin, valueMax);
+      let filtered = applyClientFilters(mapped, query, jobType, valueMin, valueMax);
+
+      // Apply radius filter if we have geocoded coordinates
+      if (geocodedLocation && searchRadius !== null) {
+        const centerCoords = { lat: geocodedLocation.lat, lng: geocodedLocation.lng };
+        filtered = filtered.filter(arch => {
+          const lat = (arch as any).lat ?? (arch as any).latitude ?? (arch.raw as any)?.lat ?? (arch.raw as any)?.latitude;
+          const lng = (arch as any).lng ?? (arch as any).longitude ?? (arch.raw as any)?.lng ?? (arch.raw as any)?.longitude;
+          
+          if (lat == null || lng == null) {
+            return true; // Include items without coordinates
+          }
+          
+          const distance = calculateDistanceKm(centerCoords.lat, centerCoords.lng, lat, lng);
+          return distance <= searchRadius;
+        });
+      }
 
       const newNextId = extractNextId(data, rawItems);
 
@@ -1786,26 +2063,56 @@ export default function ArchiFiUIFresh() {
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Input id="q" name="q" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Town or Postcode" className="min-w-0 flex-1" />
+          <ClientSelect 
+            id="clientFilter" 
+            name="clientFilter" 
+            value={selectedClientId} 
+            onChange={setSelectedClientId} 
+            clients={clients}
+            loading={clientsLoading}
+            className="w-44" 
+          />
           {!DEMO_MODE && (
             <Select id="jobType" name="jobType" value={jobType} onChange={setJobType} options={["All Job Types", "New Build", "Renovation", "Extension", "Interior Fit-Out"]} className="w-56" />
           )}
-          {false && (
-            <div className="flex items-center gap-2 rounded-2xl border border-neutral-300 px-3 py-2">
-              <span className="text-xs text-neutral-500">Value(m)</span>
-              <Input id="valueMin" name="valueMin" type="number" min={0} max={5} step="0.1" value={valueMin} onChange={(e) => setValueMin(Number(e.target.value))} className="h-8 w-20" />
-              <span className="text-neutral-400 select-none" aria-hidden="true">{'\u2013'}</span>
-              <Input id="valueMax" name="valueMax" type="number" min={0} max={5} step="0.1" value={valueMax} onChange={(e) => setValueMax(Number(e.target.value))} className="h-8 w-20" />
-            </div>
-          )}
+          {/* Radius Filter */}
+          <RadiusSlider
+            id="radius"
+            name="radius"
+            value={searchRadius}
+            onChange={setSearchRadius}
+            className="w-48 shrink-0"
+          />
         </div>
         <div className="flex items-center gap-2">
           <Btn variant="outline" onClick={clearDiscover}>Clear</Btn>
-          <Btn onClick={runSearch} className="shrink-0">
-            <Search className="h-4 w-4" />
-            Search
+          <Btn onClick={runSearch} className="shrink-0" disabled={isGeocoding}>
+            {isGeocoding ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Locating...
+              </>
+            ) : (
+              <>
+                <Search className="h-4 w-4" />
+                Search
+              </>
+            )}
           </Btn>
         </div>
       </div>
+
+      {/* Geocoded location feedback */}
+      {geocodedLocation && searchRadius !== null && (
+        <div className="mx-auto mt-3 max-w-[1400px]">
+          <div className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            <MapPin className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              Searching within <strong>{searchRadius}km</strong> of <strong>{geocodedLocation.displayName}</strong>
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Content area */}
       <div className="mx-auto mt-4 grid max-w-[1400px] grid-cols-12 gap-4">
@@ -1890,13 +2197,22 @@ export default function ArchiFiUIFresh() {
                           <div className="min-w-0 flex-1">
                             <div className="flex items-start justify-between">
                               <div className="truncate text-sm font-semibold text-neutral-800">{a.name}</div>
-                              {/* Scraped Indicator */}
-                              {hasBeenScraped && (
-                                <div className="ml-2 flex items-center gap-1 rounded-full bg-green-100 px-2 py-1 text-xs text-green-700 shrink-0">
-                                  <div className="h-2 w-2 rounded-full bg-green-500"></div>
-                                  <span className="hidden sm:inline">Scraped</span>
-                                </div>
-                              )}
+                              <div className="ml-2 flex items-center gap-1 shrink-0">
+                                {/* Scraped Indicator */}
+                                {hasBeenScraped && (
+                                  <div className="flex items-center gap-1 rounded-full bg-green-100 px-2 py-1 text-xs text-green-700">
+                                    <div className="h-2 w-2 rounded-full bg-green-500"></div>
+                                    <span className="hidden sm:inline">Scraped</span>
+                                  </div>
+                                )}
+                                {/* CRM Migration Badge */}
+                                {crmMigratedIds.has(a.id) && (
+                                  <div className="ml-1 flex items-center gap-1 rounded-full bg-purple-100 px-2 py-1 text-xs text-purple-700">
+                                    <Check className="h-3 w-3" />
+                                    <span className="hidden sm:inline">In CRM</span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
                               <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{a.city} • {a.postcode}</span>
@@ -2090,6 +2406,13 @@ export default function ArchiFiUIFresh() {
                           console.error("CRM migrate failed:", res.status, res.statusText);
                         } else {
                           console.log("CRM migrate success");
+                          // Track migrated IDs
+                          const migratedIds = chosen.map(a => String(a.id));
+                          setCrmMigratedIds(prev => {
+                            const next = new Set(prev);
+                            migratedIds.forEach(id => next.add(id));
+                            return next;
+                          });
                         }
                       } catch (err) {
                         console.error("CRM migrate error:", err);

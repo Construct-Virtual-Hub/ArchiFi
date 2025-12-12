@@ -32,3 +32,112 @@ body { background: #fafafa; }
 .nice-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(0,0,0,0.28);
 }
+
+/* Hide scrollbar for scroll toggle */
+.scrollbar-hide {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+/* Horizontal scrollbar for radius filter */
+.radius-scrollbar {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.radius-scrollbar::-webkit-scrollbar {
+  height: 6px; /* Horizontal scrollbar height */
+}
+
+.radius-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.radius-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.radius-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Radius slider styled as scrollbar */
+.radius-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  touch-action: none;
+}
+
+.radius-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #262626;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+  position: relative;
+  z-index: 2;
+}
+
+.radius-slider::-webkit-slider-thumb:hover {
+  background: #000;
+  transform: scale(1.15);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.radius-slider::-webkit-slider-thumb:active {
+  transform: scale(1.2);
+}
+
+.radius-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.radius-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #262626;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+  position: relative;
+  z-index: 2;
+}
+
+.radius-slider::-moz-range-thumb:hover {
+  background: #000;
+  transform: scale(1.15);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.radius-slider::-moz-range-thumb:active {
+  transform: scale(1.2);
+}
+
+.radius-slider::-moz-range-track {
+  width: 100%;
+  height: 6px;
+  background: transparent;
+  cursor: pointer;
+}

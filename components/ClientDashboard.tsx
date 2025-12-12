@@ -94,6 +94,22 @@ type OutreachRecord = {
   created_by?: string;
 };
 
+type ArchitectOutreachSummary = {
+  architectId: string;
+  architectName: string;
+  platform: string;
+  totalActions: number;
+  actions: {
+    follow: { attempted: boolean; status: string | null };
+    connect: { attempted: boolean; status: string | null };
+    like: { count: number; status: string | null };
+    message: { attempted: boolean; status: string | null };
+  };
+  sessions: string[];
+  lastActivity: string;
+  overallStatus: string;
+};
+
 type AllOutreachEnvelope = {
   success: boolean;
   metadata: {
@@ -415,7 +431,10 @@ const fetchOptions = {
   cache: "no-store" as RequestCache,
   headers: {
     "ngrok-skip-browser-warning": "true",
+    "Content-Type": "application/json",
+    "Accept": "application/json",
   },
+  mode: "cors" as RequestMode,
 };
 
 function classifyStatus(value?: string | null): "success" | "failed" | "pending" {
@@ -455,6 +474,109 @@ function formatDateOnly(date: string | Date): string {
   } catch {
     return "N/A";
   }
+}
+
+function groupRecordsByArchitect(records: OutreachRecord[]): ArchitectOutreachSummary[] {
+  const grouped = new Map<string, ArchitectOutreachSummary>();
+  
+  records.forEach(record => {
+    const architectId = record.architect_id || record.username || record.id || "unknown";
+    const architectName = record.username || record.client?.name || record.architect_id || "Unknown Architect";
+    const platform = record.platform || "unknown";
+    const key = `${architectId}-${platform}`;
+    
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        architectId,
+        architectName,
+        platform,
+        totalActions: 0,
+        actions: {
+          follow: { attempted: false, status: null },
+          connect: { attempted: false, status: null },
+          like: { count: 0, status: null },
+          message: { attempted: false, status: null },
+        },
+        sessions: [],
+        lastActivity: record.created_at,
+        overallStatus: record.status || "unknown",
+      });
+    }
+    
+    const summary = grouped.get(key)!;
+    
+    // Track sessions
+    if (record.session && !summary.sessions.includes(record.session)) {
+      summary.sessions.push(record.session);
+    }
+    
+    // Update follow status
+    if (record.follow_status !== null && record.follow_status !== undefined) {
+      summary.actions.follow.attempted = true;
+      if (!summary.actions.follow.status || record.follow_status === "success") {
+        summary.actions.follow.status = record.follow_status;
+      }
+    }
+    
+    // Update connection status
+    if (record.connection_status !== null && record.connection_status !== undefined) {
+      summary.actions.connect.attempted = true;
+      if (!summary.actions.connect.status || record.connection_status === "success") {
+        summary.actions.connect.status = record.connection_status;
+      }
+    }
+    
+    // Update like count
+    if (record.like_post_count !== null && record.like_post_count !== undefined) {
+      const likeCount = typeof record.like_post_count === 'number' 
+        ? record.like_post_count 
+        : parseInt(String(record.like_post_count), 10) || 0;
+      summary.actions.like.count += likeCount;
+      summary.actions.like.status = record.status || summary.actions.like.status;
+    }
+    
+    // Update message status
+    if (record.message_status !== null && record.message_status !== undefined) {
+      summary.actions.message.attempted = true;
+      if (!summary.actions.message.status || record.message_status === "success") {
+        summary.actions.message.status = record.message_status;
+      }
+    }
+    
+    // Also check actions array if present
+    if (record.actions && Array.isArray(record.actions)) {
+      record.actions.forEach(action => {
+        if (action.action === "follow") {
+          summary.actions.follow.attempted = true;
+          summary.totalActions++;
+        } else if (action.action === "connect") {
+          summary.actions.connect.attempted = true;
+          summary.totalActions++;
+        } else if (action.action === "like") {
+          summary.actions.like.count += action.item_count || 1;
+          summary.totalActions++;
+        } else if (action.action === "message") {
+          summary.actions.message.attempted = true;
+          summary.totalActions++;
+        }
+      });
+    }
+    
+    // Update last activity date
+    if (new Date(record.created_at) > new Date(summary.lastActivity)) {
+      summary.lastActivity = record.created_at;
+    }
+    
+    // Update overall status (prefer success if any action succeeded)
+    if (record.status === "success") {
+      summary.overallStatus = "success";
+    } else if (summary.overallStatus !== "success" && record.status) {
+      summary.overallStatus = record.status;
+    }
+  });
+  
+  return Array.from(grouped.values())
+    .sort((a, b) => new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime());
 }
 
 function normalizeDate(date: string): string {
@@ -812,9 +934,23 @@ export default function ClientDashboard({
           console.log("No client ID specified, fetching all clients first...");
           
           // First, get the list of all clients
-          const clientsRes = await fetch(ALL_CLIENTS_ENDPOINT, fetchOptions);
+          console.log("🔍 Testing connection to:", ALL_CLIENTS_ENDPOINT);
+          let clientsRes: Response;
+          try {
+            clientsRes = await fetch(ALL_CLIENTS_ENDPOINT, fetchOptions);
+          } catch (fetchError) {
+            console.error("❌ Network error fetching clients:", fetchError);
+            throw new Error(`Network error: ${fetchError instanceof Error ? fetchError.message : "Failed to connect to server. Check if ngrok tunnel is active."}`);
+          }
           if (!clientsRes.ok) {
-            throw new Error(`Failed to fetch clients list: ${clientsRes.status}`);
+            const errorText = await clientsRes.text().catch(() => "");
+            console.error("❌ HTTP error fetching clients:", {
+              status: clientsRes.status,
+              statusText: clientsRes.statusText,
+              headers: Object.fromEntries(clientsRes.headers.entries()),
+              body: errorText.substring(0, 200),
+            });
+            throw new Error(`Failed to fetch clients list: ${clientsRes.status} ${clientsRes.statusText}. ${errorText ? `Response: ${errorText.substring(0, 100)}` : ""}`);
           }
           const clients = await clientsRes.json();
           const clientIds = Array.isArray(clients) 
@@ -950,7 +1086,16 @@ export default function ClientDashboard({
         });
       } catch (err) {
         if (!active) return;
-        setError((err as Error).message || "Unable to load outreach data");
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const fullError = err instanceof Error ? err.stack : errorMessage;
+        console.error("❌ Failed to load outreach data:", {
+          error: errorMessage,
+          fullError,
+          endpoint: OUTREACH_REPORT_ENDPOINT,
+          filters,
+          timestamp: new Date().toISOString(),
+        });
+        setError(`Unable to load outreach data: ${errorMessage}. Check browser console for details.`);
         setRecords([]);
       } finally {
         if (active) setLoading(false);
@@ -1596,58 +1741,58 @@ export default function ClientDashboard({
   return (
     <div className={containerClasses}>
       <div className="mx-auto flex max-w-[1400px] flex-col gap-4">
-        <section className="rounded-3xl border border-neutral-200 bg-white/90 p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
+        <section className="sticky top-0 z-10 rounded-3xl border border-neutral-200 bg-white/95 backdrop-blur-sm p-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-xs uppercase tracking-wide text-neutral-400">
+              <div className="text-[10px] uppercase tracking-wide text-neutral-400">
                 Dashboard
               </div>
-              <div className="text-xl font-semibold text-neutral-900">
+              <div className="text-base font-semibold text-neutral-900">
                 Outreach Insights
               </div>
-              <div className="text-sm text-neutral-500">
+              <div className="text-xs text-neutral-500">
                 Last updated {lastUpdated ? formatDate(lastUpdated) : "N/A"}
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
-                className="inline-flex items-center gap-2 rounded-2xl border border-neutral-200 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-200 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
                 onClick={handleRefresh}
               >
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw className="h-3 w-3" />
                 Refresh
               </button>
               <button
-                className="inline-flex items-center gap-2 rounded-2xl border border-neutral-200 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-200 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
                 onClick={() => handleExport("csv")}
               >
-                <ArrowDownToLine className="h-4 w-4" />
-                Export CSV
+                <ArrowDownToLine className="h-3 w-3" />
+                CSV
               </button>
               <button
-                className="inline-flex items-center gap-2 rounded-2xl border border-neutral-200 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-200 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
                 onClick={() => handleExport("excel")}
               >
-                <Download className="h-4 w-4" />
-                Export Excel
+                <Download className="h-3 w-3" />
+                Excel
               </button>
             </div>
           </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="mt-3 grid gap-2 md:grid-cols-4">
             <FilterCard
-              icon={<Users className="h-5 w-5 text-neutral-500" />}
+              icon={<Users className="h-3.5 w-3.5 text-neutral-500" />}
               label="Client ID"
             >
               <input
-                className="w-full rounded-2xl border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                className="w-full rounded-xl border border-neutral-200 px-2 py-1.5 text-xs outline-none focus:border-neutral-400"
                 value={filters.clientId}
                 onChange={(e) => updateFilter("clientId", e.target.value)}
                 placeholder="All clients"
               />
             </FilterCard>
             <FilterCard
-              icon={<Calendar className="h-5 w-5 text-neutral-500" />}
+              icon={<Calendar className="h-3.5 w-3.5 text-neutral-500" />}
               label="Date Range"
             >
               <Select
@@ -1657,7 +1802,7 @@ export default function ClientDashboard({
               />
             </FilterCard>
             <FilterCard
-              icon={<Filter className="h-5 w-5 text-neutral-500" />}
+              icon={<Filter className="h-3.5 w-3.5 text-neutral-500" />}
               label="Platform"
             >
               <Select
@@ -1667,7 +1812,7 @@ export default function ClientDashboard({
               />
             </FilterCard>
             <FilterCard
-              icon={<ClipboardCheck className="h-5 w-5 text-neutral-500" />}
+              icon={<ClipboardCheck className="h-3.5 w-3.5 text-neutral-500" />}
               label="Status"
             >
               <Select
@@ -1677,12 +1822,6 @@ export default function ClientDashboard({
               />
             </FilterCard>
           </div>
-
-          {error && (
-            <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
-              <strong>Error:</strong> {error}
-            </div>
-          )}
         </section>
 
         {loading ? (
@@ -1695,6 +1834,7 @@ export default function ClientDashboard({
             <OverviewStrip data={aggregated.overview} />
             <PlatformGrid cards={aggregated.platformCards} />
             <ActionSummaryGrid summary={aggregated.actionSummary} />
+            <ArchitectOutreachTable records={records} />
             <TimelineSection data={aggregated.timeline} />
             <SuccessMetricsSection metrics={aggregated.successMetrics} />
             {executiveSummary && <ExecutiveSummarySection data={executiveSummary} />}
@@ -1714,6 +1854,17 @@ export default function ClientDashboard({
                 {timeSeries && " Time series ✓"}
               </div>
             )}
+            {error && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold">⚠️ Connection Error:</span>
+                  <span>{error}</span>
+                </div>
+                <div className="mt-1 text-[10px] text-red-500">
+                  Check browser console (F12) for details. ngrok tunnel may have expired or backend server offline.
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1731,12 +1882,12 @@ function FilterCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-neutral-200 bg-white px-3 py-2 shadow-sm">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
+    <div className="rounded-xl border border-neutral-200 bg-white px-2 py-1.5 shadow-sm">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
         {icon}
         {label}
       </div>
-      <div className="mt-2">{children}</div>
+      <div className="mt-1.5">{children}</div>
     </div>
   );
 }
@@ -1754,7 +1905,7 @@ function Select({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-2xl border border-neutral-200 px-3 py-2 text-sm text-neutral-700 outline-none focus:border-neutral-400"
+      className="w-full rounded-xl border border-neutral-200 px-2 py-1.5 text-xs text-neutral-700 outline-none focus:border-neutral-400"
     >
       {options.map((option) => (
         <option key={option.value} value={option.value}>
@@ -2072,6 +2223,192 @@ function ProfilesTable({ rows }: { rows: ProfileRow[] }) {
                 </td>
                 <td className="px-3 py-2">{row.actionsTaken.join(", ")}</td>
                 <td className="px-3 py-2">{formatDate(row.lastAction)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function ActionStatusBadge({ attempted, status }: { attempted: boolean; status: string | null }) {
+  if (!attempted) return <span className="text-neutral-300">—</span>;
+  const statusClass = 
+    status === "success" ? "bg-green-100 text-green-700" :
+    status === "failed" ? "bg-red-100 text-red-700" :
+    "bg-amber-100 text-amber-700";
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-xs capitalize ${statusClass}`}>
+      {status || "pending"}
+    </span>
+  );
+}
+
+function ArchitectOutreachTable({ records }: { records: OutreachRecord[] }) {
+  const grouped = useMemo(() => groupRecordsByArchitect(records), [records]);
+  
+  // Mock data fallback when online data is unavailable
+  const getMockData = (): ArchitectOutreachSummary[] => {
+    const now = new Date();
+    const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    
+    return [
+      {
+        architectId: "arch_001",
+        architectName: "Sarah Mitchell",
+        platform: "linkedin",
+        totalActions: 4,
+        actions: {
+          follow: { attempted: true, status: "success" },
+          connect: { attempted: true, status: "success" },
+          like: { count: 3, status: "success" },
+          message: { attempted: true, status: "pending" },
+        },
+        sessions: ["session_001"],
+        lastActivity: twoDaysAgo,
+        overallStatus: "success",
+      },
+      {
+        architectId: "arch_002",
+        architectName: "James Chen",
+        platform: "instagram",
+        totalActions: 3,
+        actions: {
+          follow: { attempted: true, status: "success" },
+          connect: { attempted: false, status: null },
+          like: { count: 5, status: "success" },
+          message: { attempted: true, status: "success" },
+        },
+        sessions: ["session_002"],
+        lastActivity: threeDaysAgo,
+        overallStatus: "success",
+      },
+      {
+        architectId: "arch_003",
+        architectName: "Emma Thompson",
+        platform: "linkedin",
+        totalActions: 2,
+        actions: {
+          follow: { attempted: true, status: "failed" },
+          connect: { attempted: true, status: "pending" },
+          like: { count: 0, status: null },
+          message: { attempted: false, status: null },
+        },
+        sessions: ["session_003"],
+        lastActivity: fiveDaysAgo,
+        overallStatus: "pending",
+      },
+    ];
+  };
+  
+  const displayData = grouped.length > 0 ? grouped : getMockData();
+  const isUsingMockData = grouped.length === 0 && records.length === 0;
+  
+  if (displayData.length === 0) {
+    return (
+      <section className="rounded-3xl border border-neutral-200 bg-white/90 p-4 shadow-sm">
+        <div className="mb-4">
+          <div className="text-xs uppercase tracking-wide text-neutral-400">
+            Detailed Breakdown
+          </div>
+          <div className="text-lg font-semibold text-neutral-900">
+            Outreach Actions by Architect
+          </div>
+        </div>
+        <div className="py-8 text-center text-sm text-neutral-500">
+          No outreach actions found for the selected filters.
+        </div>
+      </section>
+    );
+  }
+  
+  return (
+    <section className="rounded-3xl border border-neutral-200 bg-white/90 p-4 shadow-sm">
+      <div className="mb-4">
+        <div className="text-xs uppercase tracking-wide text-neutral-400">
+          Detailed Breakdown
+        </div>
+        <div className="text-lg font-semibold text-neutral-900">
+          Outreach Actions by Architect
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="text-sm text-neutral-500">
+            {displayData.length} architect{displayData.length !== 1 ? 's' : ''} with outreach activity
+          </div>
+          {isUsingMockData && (
+            <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+              Demo Data
+            </span>
+          )}
+        </div>
+      </div>
+      
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="text-xs uppercase tracking-wide text-neutral-400">
+            <tr>
+              <th className="px-3 py-2 font-semibold">Architect</th>
+              <th className="px-3 py-2 font-semibold">Platform</th>
+              <th className="px-3 py-2 font-semibold">Follow</th>
+              <th className="px-3 py-2 font-semibold">Connect</th>
+              <th className="px-3 py-2 font-semibold">Likes</th>
+              <th className="px-3 py-2 font-semibold">Message</th>
+              <th className="px-3 py-2 font-semibold">Status</th>
+              <th className="px-3 py-2 font-semibold">Last Activity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayData.map((arch) => (
+              <tr key={`${arch.architectId}-${arch.platform}`} className="border-t border-neutral-100 text-neutral-700">
+                <td className="px-3 py-2">
+                  <div className="font-medium text-neutral-800">{arch.architectName}</div>
+                  <div className="text-xs text-neutral-500">{arch.architectId}</div>
+                </td>
+                <td className="px-3 py-2 capitalize">{arch.platform}</td>
+                <td className="px-3 py-2">
+                  <ActionStatusBadge 
+                    attempted={arch.actions.follow.attempted} 
+                    status={arch.actions.follow.status} 
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <ActionStatusBadge 
+                    attempted={arch.actions.connect.attempted} 
+                    status={arch.actions.connect.status} 
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  {arch.actions.like.count > 0 ? (
+                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">
+                      {arch.actions.like.count}
+                    </span>
+                  ) : (
+                    <span className="text-neutral-300">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  <ActionStatusBadge 
+                    attempted={arch.actions.message.attempted} 
+                    status={arch.actions.message.status} 
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs capitalize ${
+                      arch.overallStatus === "success"
+                        ? "bg-green-100 text-green-700"
+                        : arch.overallStatus === "failed"
+                        ? "bg-red-100 text-red-700"
+                        : "bg-amber-100 text-amber-700"
+                    }`}
+                  >
+                    {arch.overallStatus}
+                  </span>
+                </td>
+                <td className="px-3 py-2">{formatDate(arch.lastActivity)}</td>
               </tr>
             ))}
           </tbody>

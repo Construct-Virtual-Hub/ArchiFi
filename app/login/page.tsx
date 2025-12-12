@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 /**
@@ -35,10 +35,17 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit = useMemo(
-    () => isValidEmail(email) && agree && !loading,
-    [email, agree, loading]
-  );
+  // Debug: Log state changes
+  React.useEffect(() => {
+    console.log("State updated:", { email, agree, loading });
+  }, [email, agree, loading]);
+
+  const canSubmit = isValidEmail(email) && agree && !loading;
+  
+  // Debug: Log canSubmit
+  React.useEffect(() => {
+    console.log("canSubmit:", canSubmit, { email, isValid: isValidEmail(email), agree, loading });
+  }, [canSubmit, email, agree, loading]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -53,19 +60,35 @@ export default function LoginPage() {
     }
     setLoading(true);
     try {
+      console.log("Attempting login with email:", email);
       const res = await postLogin(email.trim());
+      console.log("Login response:", res);
+      
       if (!res.ok) throw new Error("Login failed");
 
-      localStorage.setItem(
-        "archifi:user",
-        JSON.stringify({ id: res.user.id, email: res.user.email })
-      );
+      const userData = { id: res.user.id, email: res.user.email };
+      console.log("Saving to localStorage:", { user: userData, token: res.token });
+      
+      localStorage.setItem("archifi:user", JSON.stringify(userData));
       localStorage.setItem("archifi:token", res.token);
 
-      router.replace("/"); // go to the app
+      // Verify it was saved
+      const saved = localStorage.getItem("archifi:user");
+      console.log("Verified localStorage:", saved);
+      
+      // Use push instead of replace to ensure navigation works
+      router.push("/");
+      
+      // Fallback: force navigation if router doesn't work
+      setTimeout(() => {
+        if (window.location.pathname === "/login") {
+          console.log("Router didn't navigate, forcing redirect");
+          window.location.href = "/";
+        }
+      }, 100);
     } catch (err: any) {
+      console.error("Login error:", err);
       setError(err?.message || "Something went wrong. Please try again.");
-    } finally {
       setLoading(false);
     }
   }
@@ -101,7 +124,11 @@ export default function LoginPage() {
               placeholder="you@company.com"
               className={classInput}
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                const newValue = e.target.value;
+                console.log("Email input changed:", newValue);
+                setEmail(newValue);
+              }}
               aria-invalid={!!error && !isValidEmail(email)}
             />
 
@@ -109,7 +136,11 @@ export default function LoginPage() {
               <input
                 type="checkbox"
                 checked={agree}
-                onChange={(e) => setAgree(e.target.checked)}
+                onChange={(e) => {
+                  const newValue = e.target.checked;
+                  console.log("Checkbox changed:", newValue);
+                  setAgree(newValue);
+                }}
                 className="mt-1 size-4 rounded border-black/20 text-black focus:ring-black/70"
               />
               <span>
@@ -124,7 +155,25 @@ export default function LoginPage() {
               </div>
             ) : null}
 
-            <button type="submit" className={classBtn} disabled={!canSubmit}>
+            {/* Debug info - remove in production */}
+            {process.env.NODE_ENV === 'development' && (
+              <div className="text-xs text-gray-500 p-2 bg-gray-50 rounded">
+                Debug: Email="{email}" | Valid={isValidEmail(email) ? 'Yes' : 'No'} | Agree={agree ? 'Yes' : 'No'} | Loading={loading ? 'Yes' : 'No'} | CanSubmit={canSubmit ? 'Yes' : 'No'}
+              </div>
+            )}
+
+            <button 
+              type="submit" 
+              className={classBtn} 
+              disabled={!canSubmit}
+              onClick={(e) => {
+                console.log("Button clicked!", { canSubmit, email, agree, loading });
+                if (!canSubmit) {
+                  e.preventDefault();
+                  console.log("Button is disabled, preventing submit");
+                }
+              }}
+            >
               {loading ? "Signing in…" : "Continue"}
             </button>
           </form>
