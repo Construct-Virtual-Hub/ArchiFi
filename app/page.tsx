@@ -61,6 +61,38 @@ const Select: React.FC<{ id?: string; name?: string; value: string; onChange: (v
   </div>
 );
 
+type ClientOption = {
+  id: string;
+  name: string;
+};
+
+const ClientSelect: React.FC<{ 
+  id?: string; 
+  name?: string; 
+  value: string; 
+  onChange: (v: string) => void; 
+  clients: ClientOption[]; 
+  className?: string 
+}> = ({ id, name, value, onChange, clients, className = "" }) => (
+  <div className={`relative ${className}`}>
+    <select
+      id={id}
+      name={name}
+      className="appearance-none h-10 w-full rounded-2xl border border-neutral-300 bg-white px-3 pr-8 text-sm text-neutral-800 focus:border-neutral-400"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">All Clients</option>
+      {clients.map((client) => (
+        <option key={client.id} value={client.id}>
+          {client.name}
+        </option>
+      ))}
+    </select>
+    <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
+  </div>
+);
+
 const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className = "", children, ...props }) => (
   <div className={`min-w-0 rounded-2xl border border-neutral-200 bg-white/90 shadow-sm ${className}`} {...props}>
     {children}
@@ -268,6 +300,9 @@ const GET_ARCHITECT_DETAILS =
   "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5";
 const CRM_MIGRATE_ENDPOINT =
   "https://tumultuously-starchlike-leta.ngrok-free.dev/webhook/e992794a-99f0-44ca-a3bf-edc07aaca449";
+
+const ALL_CLIENTS_ENDPOINT =
+  "https://impavidly-arguable-cicely.ngrok-free.dev/webhook/cv/clients/";
 
 // New LinkedIn client (apply only to linkedin payloads)
 const LINKEDIN_CLIENT = {
@@ -953,6 +988,10 @@ export default function ArchiFiUIFresh() {
   const [discoverModalArchitect, setDiscoverModalArchitect] = useState<Architect | null>(null);
   const [discoverModalLoading, setDiscoverModalLoading] = useState(false);
 
+  // Client toggle state
+  const [clients, setClients] = useState<ClientOption[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState<string>("");
+
   const outreachTimersRef = useRef<Record<string, number>>({}); // session -> intervalId
 
   useEffect(() => {
@@ -960,6 +999,60 @@ export default function ArchiFiUIFresh() {
       Object.keys(outreachTimersRef.current).forEach(stopOutreachPolling);
     };
   }, []);
+
+  // Load selected client from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = typeof window !== "undefined" ? localStorage.getItem("archifi:client") : null;
+      if (saved) {
+        setSelectedClientId(saved);
+      }
+    } catch {
+      // ignore errors
+    }
+  }, []);
+
+  // Fetch clients list
+  useEffect(() => {
+    async function fetchClients() {
+      try {
+        const res = await fetch(ALL_CLIENTS_ENDPOINT);
+        if (!res.ok) {
+          console.warn("Failed to fetch clients:", res.status);
+          return;
+        }
+        const clientsData = await res.json();
+        if (!Array.isArray(clientsData)) {
+          console.warn("Unexpected clients response format");
+          return;
+        }
+        const clientOptions: ClientOption[] = clientsData.map((c: any) => {
+          const id = String(c.id || c.client_id || c.clientId || "");
+          const name = String(c.name || c.business_name || c.client_name || id || "Unknown Client");
+          return { id, name };
+        }).filter((c: ClientOption) => c.id);
+        setClients(clientOptions);
+      } catch (err) {
+        console.warn("Error fetching clients:", err);
+      }
+    }
+    void fetchClients();
+  }, []);
+
+
+  // Handle client change
+  function handleClientChange(clientId: string) {
+    setSelectedClientId(clientId);
+    try {
+      if (clientId) {
+        localStorage.setItem("archifi:client", clientId);
+      } else {
+        localStorage.removeItem("archifi:client");
+      }
+    } catch {
+      // ignore errors
+    }
+  }
 
   function stopOutreachPolling(sessionId: string) {
     const timers = outreachTimersRef.current;
@@ -1223,6 +1316,12 @@ export default function ArchiFiUIFresh() {
     }
   }
 
+  // Auto-load search results on mount to show already scraped architects
+  useEffect(() => {
+    void runSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run once on mount
+
   async function goToNextPage() {
     if (apiLoading) return;
     const idx = apiPageIndex;
@@ -1341,6 +1440,34 @@ export default function ArchiFiUIFresh() {
     const target = visibleItems; // use full server page (100) or client page (20) as appropriate
     target.forEach((a) => (upd[a.id] = true));
     setDiscoverSelected(upd);
+  }
+
+  // Approve selected items to Review (without scraping)
+  function approveToReview() {
+    const picked = discover.filter(a => discoverSelected[a.id]);
+    if (!picked.length) return;
+
+    // Move selected items to review without scrape status
+    setReview(cur => {
+      const ids = new Set(cur.map(x => x.id));
+      const merged = [...cur];
+      for (const p of picked) {
+        // Keep existing raw data if available, otherwise use the architect data as-is
+        const itemToAdd = { ...p };
+        if (!ids.has(p.id)) {
+          merged.push(itemToAdd);
+        } else {
+          // Update existing item
+          const index = merged.findIndex(x => x.id === p.id);
+          if (index >= 0) merged[index] = itemToAdd;
+        }
+      }
+      return merged;
+    });
+
+    // Clear selection and switch to review tab
+    setDiscoverSelected({});
+    setActiveTab("review");
   }
 
   async function scrapeDetails() {
@@ -1784,6 +1911,16 @@ export default function ArchiFiUIFresh() {
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-neutral-100 text-neutral-500 shadow-inner">A</div>
           <div className="text-sm font-semibold tracking-wide text-neutral-400">ARCHIFI</div>
         </div>
+        <div className="flex min-w-0 items-center gap-3">
+          <ClientSelect
+            id="client"
+            name="client"
+            value={selectedClientId}
+            onChange={handleClientChange}
+            clients={clients}
+            className="w-48"
+          />
+        </div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Input id="q" name="q" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Town or Postcode" className="min-w-0 flex-1" />
           {!DEMO_MODE && (
@@ -1853,7 +1990,7 @@ export default function ArchiFiUIFresh() {
             <Btn variant={activeTab === "discover" ? "solid" : "outline"} onClick={() => setActiveTab("discover")}>Discover</Btn>
             <Btn variant={activeTab === "review" ? "solid" : "outline"} onClick={() => setActiveTab("review")}>Review</Btn>
             <Btn variant={activeTab === "outreach" ? "solid" : "outline"} onClick={() => setActiveTab("outreach")}>Outreach</Btn>
-            <Btn variant={activeTab === "dashboard" ? "solid" : "outline"} onClick={() => setActiveTab("dashboard")}>Client Dashboard</Btn>
+            <Btn variant={activeTab === "dashboard" ? "solid" : "outline"} onClick={() => setActiveTab("dashboard")}>Outreach Dashboard</Btn>
           </div>
 
           {/* DISCOVER */}
@@ -1872,8 +2009,8 @@ export default function ArchiFiUIFresh() {
 
                   {/* Existing controls (unchanged order after pagination) */}
                   <Btn variant="outline" onClick={selectAllOnPage}>Select All</Btn>
-                  <Btn onClick={scrapeDetails} disabled={apiLoading}>
-                    {apiLoading ? "Loading..." : "Scrape Details"}
+                  <Btn onClick={approveToReview} disabled={apiLoading}>
+                    Approve to Review
                   </Btn>
                 </div>
               </div>
@@ -2038,7 +2175,7 @@ export default function ArchiFiUIFresh() {
                     </Card>
                   ))}
                   {review.length === 0 && (
-                    <div className="flex h-[40vh] items-center justify-center text-sm text-neutral-500">No items yet. Use "Scrape Details" from Discover.</div>
+                    <div className="flex h-[40vh] items-center justify-center text-sm text-neutral-500">No items yet. Use "Approve to Review" from Discover.</div>
                   )}
                 </div>
               </Card>
@@ -2186,7 +2323,7 @@ export default function ArchiFiUIFresh() {
 
           {activeTab === "dashboard" && (
             <Card className="h-[75vh] overflow-hidden p-0">
-              <ClientDashboard />
+              <ClientDashboard initialFilters={{ clientId: selectedClientId }} />
             </Card>
           )}
         </div>

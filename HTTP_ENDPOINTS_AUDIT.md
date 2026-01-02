@@ -72,7 +72,7 @@
   - Client reads: `items` array, `nextId` for pagination
   - Items mapped via `mapApiItemToArchitect()` expecting: `id`, `full_name`, `name`, `company_name`, `company`, `post_code`, `postcode`, `address`, `city`, `town`, `email`, `phone`, `website`, `linkedin_profile_url`, `company_linkedin_profile_url`, `instagram_profile_url`, `company_instagram_profile_url`, `facebook_profile_url`, `company_facebook_profile_url`, `specialty`, `speciality`, `projectType`, `type`, `valueMillions`, `grade`
 - **Guards/env:**
-- `UPSTREAM_SEARCH` (default: `"https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"`)
+- `UPSTREAM_SEARCH` (default: `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"`)
 - **Notes:**
   - 20 second timeout via AbortController
   - CORS headers: `Access-Control-Allow-Origin: *`
@@ -129,7 +129,7 @@
   - Client reads: `session` or `session_id` or `id` for session ID
   - For details fetch: array of architect objects with scrape fields
 - **Guards/env:**
-- `UPSTREAM_SCRAPE` (default: `"https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"`)
+- `UPSTREAM_SCRAPE` (default: `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"`)
 - **Notes:**
   - 20 second timeout via AbortController
   - CORS headers: `Access-Control-Allow-Origin: *`
@@ -179,7 +179,7 @@
   }>
   ```
 - **Guards/env:**
-- `UPSTREAM_SCRAPE_STATUS` (default: `"https://7a4d4f14fd68.ngrok-free.app/webhook/50546cbf-1229-4f96-a8a8-27ed62c0381e"`)
+- `UPSTREAM_SCRAPE_STATUS` (default: `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/ff8fce62-6ea3-4344-99bc-0c0075dbc2ae"`)
 - **Notes:**
   - Returns 400 if `session` query param missing
   - Polled every 10 seconds when active
@@ -399,7 +399,7 @@
 - **Defined in:** `app/page.tsx:156-157`
 - **Used in:** `app/page.tsx:459` - `fetch(GET_ARCHITECT_DETAILS, ...)`
 - **Purpose:** Fetch architect details from upstream ngrok webhook
-- **URL:** `"https://7a4d4f14fd68.ngrok-free.app/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"` (hardcoded)
+- **URL:** `"https://impavidly-arguable-cicely.ngrok-free.dev/webhook/a4cfdee8-25f9-4c3f-bda6-c2571f1975c5"` (hardcoded)
 - **Request body:**
   ```typescript
   {

@@ -792,6 +792,19 @@ export default function ClientDashboard({
     useState<TimeSeriesEnvelope | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Sync clientId filter when initialFilters.clientId prop changes (from global client toggle)
+  useEffect(() => {
+    if (initialFilters?.clientId !== undefined) {
+      setFilters((prev) => {
+        // Only update if the value actually changed
+        if (prev.clientId !== initialFilters.clientId) {
+          return { ...prev, clientId: initialFilters.clientId ?? "" };
+        }
+        return prev;
+      });
+    }
+  }, [initialFilters?.clientId]);
+
   // Force refresh function
   const handleRefresh = () => {
     setRefreshKey((prev) => prev + 1);
